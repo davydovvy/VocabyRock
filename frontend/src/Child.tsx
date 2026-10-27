@@ -110,8 +110,6 @@ export default function Child({
     setBusy(true)
     setError('')
     try {
-      if (kind === 'listen' && !('speechSynthesis' in window))
-        throw new Error('Voice is unavailable here. Pick another game!')
       const next = await api<Practice>(
         '/practice',
         json('POST', {
@@ -368,7 +366,7 @@ export default function Child({
                 .filter((game) => config.allowed_exercises.includes(game.kind))
                 .map((game) => (
                   <button
-                    disabled={busy || (game.kind === 'listen' && !('speechSynthesis' in window))}
+                    disabled={busy}
                     key={game.kind}
                     onClick={() => void start(game.kind)}
                     className={`${game.color} min-h-32 rounded-2xl p-4 font-black text-center hover:-translate-y-1 transition-transform border-2 border-white shadow-sm`}
@@ -380,7 +378,7 @@ export default function Child({
             </div>
             {!('speechSynthesis' in window) && (
               <p className="mt-4 font-bold text-[#9b5b45]">
-                Voice is unavailable here. Try another game.
+                Device voice is unavailable. Words with saved recordings can still play offline.
               </p>
             )}
             <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -577,14 +575,21 @@ function Game({
     }
   }
   const speech = task?.speech || ''
+  const recording = task?.audio || ''
   const voiceSupported = 'speechSynthesis' in window
-  useEffect(() => {
-    if (practice.kind === 'listen' && speech && voiceSupported && !feedback && !done) {
+  const playWord = () => {
+    if (recording) {
+      void new Audio(recording).play().catch(() => {})
+    } else if (voiceSupported) {
+      window.speechSynthesis.cancel()
       const utterance = new SpeechSynthesisUtterance(speech)
       utterance.lang = config.accent
       utterance.rate = 0.85
       window.speechSynthesis.speak(utterance)
     }
+  }
+  useEffect(() => {
+    if (practice.kind === 'listen' && speech && !feedback && !done) playWord()
   }, [index])
 
   if (done && (practice.kind === 'match' || !feedback))
@@ -737,16 +742,10 @@ function Game({
           {practice.kind === 'listen' ? (
             <div className="mt-8">
               <button
-                disabled={!voiceSupported}
+                disabled={!recording && !voiceSupported}
                 aria-label="Play word"
                 className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-[#e9e2ff] text-violet shadow-[0_8px_0_#cfc2f6]"
-                onClick={() => {
-                  window.speechSynthesis.cancel()
-                  const u = new SpeechSynthesisUtterance(speech)
-                  u.lang = config.accent
-                  u.rate = 0.85
-                  window.speechSynthesis.speak(u)
-                }}
+                onClick={playWord}
               >
                 <Volume2 size={54} />
               </button>

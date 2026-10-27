@@ -7,7 +7,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 - React, TypeScript, Vite, and Tailwind CSS build a responsive single page app.
 - FastAPI serves the compiled app and REST API from the same origin.
 - SQLite stores users, shared vocabulary, packs, sessions, settings, and each child's progress by word and direction. SQLAlchemy models and Alembic migrations manage the schema.
-- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. Browser speech synthesis handles English pronunciation; no external speech or analytics service is used.
+- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. A selected Wikimedia pronunciation is downloaded to the same volume for offline playback; browser speech synthesis is the fallback for words without a recording.
 - One container runs FastAPI. Docker Compose bind mounts one persistent directory.
 
 ## Repository layout
@@ -32,7 +32,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 
 On first startup, VacabyRock creates the parent profile, two child profiles, and Animals, Food, and Everyday Objects packs with 30 sample words. Later restarts keep all data. The initial parent password is read from `.env`; the example placeholder does not grant access.
 
-The first Docker build downloads build dependencies. Normal app use needs no internet connection unless a parent searches Pixabay for pictures. The device's browser must have a suitable English speech voice for listening and pronunciation.
+The first Docker build downloads build dependencies. Parent picture searches, dictionary lookups, and pronunciation downloads need internet access. Once a recording is ready, children can play it without internet access. Words without a saved recording use the device's English speech voice when available.
 
 ## Synology DiskStation
 
@@ -61,7 +61,7 @@ DATA_DIR=../data ../.venv/bin/python -m app.initialize
 DATA_DIR=../data FRONTEND_DIST=../frontend/dist ADMIN_PASSWORD=your-local-password ../.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-In another terminal, run `cd frontend && npm ci && npm run dev`. Open `http://localhost:5173`; Vite forwards `/api` and `/media` to port 8000. Set `ADMIN_PASSWORD` and, if using Pixabay, `PIXABAY_API_KEY` in the backend terminal (or run from the repository root where `.env` is read). Keep `.env` and `data/` private.
+In another terminal, run `cd frontend && npm ci && npm run dev`. Open `http://localhost:5173`; Vite forwards `/api`, `/media`, and `/audio` to port 8000. Set `ADMIN_PASSWORD` and, if using Pixabay, `PIXABAY_API_KEY` in the backend terminal (or run from the repository root where `.env` is read). Keep `.env` and `data/` private.
 
 ### Tests and checks
 
@@ -86,6 +86,14 @@ Choose the locked Parent avatar and enter `ADMIN_PASSWORD`. Add words to the lib
 
 To search Pixabay for a word picture, add your API key as `PIXABAY_API_KEY` in `.env` and run `docker compose up -d --build` to apply it. In the parent's Vocabulary Library, use the **Pixabay** button beside a word, search, and choose a picture. The key stays on the server. Search results show their Pixabay source; a chosen picture is downloaded, validated, and saved locally before children see it. Pixabay search needs internet access. API responses are cached for 24 hours in `data/pixabay-cache/`. See [Pixabay's API documentation](https://pixabay.com/api/docs/) and [Content License](https://pixabay.com/service/terms/) for its current requirements.
 
+### Dictionary lookup and pronunciation
+
+In **Add Word** or **Edit Word**, enter the English word and click **Fill from Wikimedia**. Typing alone sends no lookup requests. The button queries [WiktAPI](https://wiktapi.dev/quickstart) for Russian translation choices, IPA, and available recordings. US pronunciations appear first; if the entry lists a US spelling, the form offers it. Select translations and a recording, then review or edit every field before saving. Missing information stays blank for manual entry.
+
+Saving creates the word immediately. If a recording was selected, the library shows **Audio queued for download**, **Audio retry scheduled**, **Audio available offline**, or an error with **Retry audio**. A single background worker downloads recordings to the Synology data volume and resumes pending work after a restart. It spaces downloads and honors Wikimedia's `Retry-After` response; a rate limit can delay audio without losing the word. After eight unsuccessful attempts, use **Retry audio** to queue it again. The child's Listen game uses the saved recording offline, falling back to browser speech synthesis when no recording is stored.
+
+The lookup needs access to `api.wiktapi.dev`; audio downloads need access to `upload.wikimedia.org`. No dictionary API key is required. Wikimedia does not promise a fixed download quota and says limits can change; the app waits and retries when it receives a limit response. See [Wikimedia's API usage guidelines](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_API_Usage_Guidelines).
+
 The Import / Export area provides a UTF-8 CSV template, preview, validation, duplicate recognition, and exports for the whole library or a pack. Separate translations in one CSV cell with semicolons. Entries with the same English text but different translations remain separate meanings.
 
 The Progress area shows both children independently, including learned and difficult words, success rates, recent games, and upcoming reviews. It can reset one word, one pack, or all progress for one child with confirmation.
@@ -107,11 +115,11 @@ Correct answers lengthen review intervals; missed words return sooner. Reviews a
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `PIXABAY_API_KEY` | empty | Optional server-side key for parent picture search |
 
-The mount contains `vacabyrock.sqlite3`, `images/`, `audio/` (reserved for future attached pronunciation), optional `pixabay-cache/`, and optional `backups/`. SQLite may also create temporary `-wal` and `-shm` files. Back up the data directory and `.env` separately. Do not put either in version control.
+The mount contains `vacabyrock.sqlite3`, `images/`, `audio/` (downloaded pronunciation recordings), optional `pixabay-cache/`, and optional `backups/`. Audio queue status and retry times are stored in SQLite, so queued work survives a container restart. SQLite may also create temporary `-wal` and `-shm` files. Back up the data directory and `.env` separately. Do not put either in version control.
 
 ## Backup and restore
 
-`scripts/backup.py` uses SQLite's online backup API to make a consistent database snapshot and includes image and future audio files in a ZIP. It omits `pixabay-cache/`, which the app can rebuild as needed. Run it on the host with Python 3.11+ while the app is running:
+`scripts/backup.py` uses SQLite's online backup API to make a consistent database snapshot and includes image and audio files in a ZIP. It omits `pixabay-cache/`, which the app can rebuild as needed. Run it on the host with Python 3.11+ while the app is running:
 
 ```sh
 python3 scripts/backup.py --data /volume1/docker/vacabyrock/data --output /volume1/backups/vacabyrock.zip
@@ -134,7 +142,7 @@ Create a backup, update the source, then run `docker compose up -d --build`. Sta
 
 ## Known limitations
 
-- Browser speech voices vary by device. The listening game is disabled when speech synthesis is unavailable.
+- Browser speech voices vary by device. A word without a saved recording cannot be heard in the Listen game when speech synthesis is unavailable.
 - Child profiles have no passwords. Keep the service on a trusted LAN.
 - Pictures use uploaded files or local emoji placeholders; the sample packs do not include licensed artwork.
 - Pixabay search needs an API key and internet access. If Pixabay limits image downloads, the app retries briefly and may ask you to try again later.

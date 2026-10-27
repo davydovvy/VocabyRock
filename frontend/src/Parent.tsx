@@ -19,6 +19,7 @@ import {
   download,
   json,
   type Config,
+  type DictionaryResult,
   type Pack,
   type PixabayHit,
   type Profile,
@@ -55,6 +56,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [editingWord, setEditingWord] = useState<Word | null>(null)
   const [wordForm, setWordForm] = useState<WordInput>(blankWord)
   const [translations, setTranslations] = useState('')
+  const [dictionary, setDictionary] = useState<DictionaryResult | null>(null)
+  const [dictionaryBusy, setDictionaryBusy] = useState(false)
+  const [dictionaryError, setDictionaryError] = useState('')
+  const [selectedAudio, setSelectedAudio] = useState('')
+  const dictionaryRequest = useRef(0)
   const [showWordForm, setShowWordForm] = useState(false)
   const [editingPack, setEditingPack] = useState<Pack | null>(null)
   const [packForm, setPackForm] = useState(blankPack)
@@ -106,6 +112,16 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     if (tab === 'progress' || tab === 'overview')
       void refreshStats().catch((e) => setError(e.message))
   }, [tab])
+  useEffect(() => {
+    if (!words.some((word) => word.audio_status === 'pending' || word.audio_status === 'retrying'))
+      return
+    const timer = window.setInterval(() => {
+      void api<Word[]>('/words')
+        .then(setWords)
+        .catch(() => {})
+    }, 10000)
+    return () => window.clearInterval(timer)
+  }, [words])
   const run = async (action: () => Promise<unknown>, message: string) => {
     setError('')
     setNotice('')
@@ -128,6 +144,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   )
 
   const openWord = (word?: Word) => {
+    dictionaryRequest.current += 1
+    setDictionary(null)
+    setDictionaryError('')
+    setDictionaryBusy(false)
+    setSelectedAudio('')
     setError('')
     setEditingWord(word || null)
     setWordForm(
@@ -146,6 +167,40 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setTranslations(word?.translations.join('; ') || '')
     setShowWordForm(true)
   }
+  const closeWord = () => {
+    dictionaryRequest.current += 1
+    setShowWordForm(false)
+  }
+  const changeEnglish = (value: string) => {
+    dictionaryRequest.current += 1
+    setDictionary(null)
+    setDictionaryError('')
+    setDictionaryBusy(false)
+    setSelectedAudio('')
+    setWordForm((current) => ({ ...current, english: value }))
+  }
+  const lookupDictionary = async () => {
+    const word = wordForm.english.trim()
+    if (!word) return
+    const requestId = ++dictionaryRequest.current
+    setDictionary(null)
+    setDictionaryError('')
+    setDictionaryBusy(true)
+    try {
+      const result = await api<DictionaryResult>(`/dictionary?word=${encodeURIComponent(word)}`)
+      if (dictionaryRequest.current !== requestId) return
+      setDictionary(result)
+      setWordForm((current) => ({
+        ...current,
+        ipa: current.ipa || result.ipa,
+        part_of_speech: current.part_of_speech || result.part_of_speech,
+      }))
+    } catch (e) {
+      if (dictionaryRequest.current === requestId) setDictionaryError((e as Error).message)
+    } finally {
+      if (dictionaryRequest.current === requestId) setDictionaryBusy(false)
+    }
+  }
   const saveWord = async () => {
     const body = {
       ...wordForm,
@@ -153,6 +208,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         .split(';')
         .map((s) => s.trim())
         .filter(Boolean),
+      audio_url: selectedAudio || null,
     }
     await run(
       async () => {
@@ -160,14 +216,23 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           editingWord ? `/words/${editingWord.id}` : '/words',
           json(editingWord ? 'PUT' : 'POST', body),
         )
-        setShowWordForm(false)
+        closeWord()
       },
-      editingWord ? 'Word saved' : 'Word added',
+      selectedAudio
+        ? editingWord
+          ? 'Word saved; audio download queued'
+          : 'Word added; audio download queued'
+        : editingWord
+          ? 'Word saved'
+          : 'Word added',
     )
   }
   const deleteWord = (word: Word) => {
     if (window.confirm(`Delete “${word.english}” from the library and all packs?`))
       void run(() => api(`/words/${word.id}`, json('DELETE')), 'Word deleted')
+  }
+  const retryAudio = async (word: Word) => {
+    await run(() => api(`/words/${word.id}/audio/retry`, json('POST')), 'Audio download queued')
   }
   const openPack = (pack?: Pack) => {
     setError('')
@@ -458,8 +523,27 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     {word.english} <span className="text-sm font-bold text-violet">{word.ipa}</span>
                   </h3>
                   <p className="text-[#747995] font-bold">{word.translations.join(' · ')}</p>
+                  {word.audio_status === 'pending' && (
+                    <p className="text-sm font-bold text-violet">Audio queued for download</p>
+                  )}
+                  {word.audio_status === 'retrying' && (
+                    <p className="text-sm font-bold text-violet">Audio retry scheduled</p>
+                  )}
+                  {word.audio_status === 'ready' && (
+                    <p className="text-sm font-bold text-violet">Audio available offline</p>
+                  )}
+                  {word.audio_status === 'failed' && (
+                    <p className="text-sm font-bold text-coral">
+                      Audio download failed{word.audio_error ? `: ${word.audio_error}` : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="flex gap-2">
+                  {word.audio_status === 'failed' && (
+                    <button className="btn-soft" onClick={() => void retryAudio(word)}>
+                      Retry audio
+                    </button>
+                  )}
                   <label className="btn-soft" title="Upload picture">
                     <ImagePlus size={19} />
                     <span className="hidden sm:inline">Picture</span>
@@ -983,21 +1067,112 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         </div>
       )}
       {showWordForm && (
-        <Dialog
-          title={editingWord ? 'Edit Word' : 'Add Word'}
-          onClose={() => setShowWordForm(false)}
-        >
+        <Dialog title={editingWord ? 'Edit Word' : 'Add Word'} onClose={closeWord}>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="English"
-              value={wordForm.english}
-              onChange={(value) => setWordForm({ ...wordForm, english: value })}
-            />
+            <Field label="English" value={wordForm.english} onChange={changeEnglish} />
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="btn-soft"
+                disabled={!wordForm.english.trim() || dictionaryBusy}
+                onClick={() => void lookupDictionary()}
+              >
+                {dictionaryBusy ? 'Looking up…' : 'Fill from Wikimedia'}
+              </button>
+            </div>
             <Field
               label="Russian translations (separate with ;)"
               value={translations}
               onChange={setTranslations}
             />
+            <div className="sm:col-span-2">
+              {dictionaryBusy && <p role="status">Looking up dictionary entry…</p>}
+              {dictionaryError && <p role="status">{dictionaryError}</p>}
+              {dictionary && (
+                <>
+                  {dictionary.us_spelling && (
+                    <button
+                      type="button"
+                      className="btn-soft mb-3"
+                      onClick={() => changeEnglish(dictionary.us_spelling)}
+                    >
+                      Use US spelling: {dictionary.us_spelling}
+                    </button>
+                  )}
+                  <p className="label">Russian translation suggestions</p>
+                  {dictionary.translations.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {dictionary.translations.map((item, index) => {
+                        const selected = translations
+                          .split(';')
+                          .map((s) => s.trim())
+                          .includes(item.word)
+                        return (
+                          <button
+                            key={`${item.word}-${item.sense}-${index}`}
+                            type="button"
+                            aria-pressed={selected}
+                            title={item.sense || undefined}
+                            className="btn-soft"
+                            onClick={() =>
+                              setTranslations((current) => {
+                                const values = current
+                                  .split(';')
+                                  .map((s) => s.trim())
+                                  .filter(Boolean)
+                                return (
+                                  selected
+                                    ? values.filter((value) => value !== item.word)
+                                    : [...values, item.word]
+                                ).join('; ')
+                              })
+                            }
+                          >
+                            {item.word}
+                            {item.sense ? ` · ${item.sense}` : ''}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p>No Russian translations found. Enter one manually.</p>
+                  )}
+                  <p className="label mt-4">Pronunciation recordings</p>
+                  {dictionary.audio.length ? (
+                    <>
+                      <label className="flex items-center gap-3 py-1">
+                        <input
+                          type="radio"
+                          name="dictionary-audio"
+                          checked={!selectedAudio}
+                          onChange={() => setSelectedAudio('')}
+                        />
+                        <span>No recording</span>
+                      </label>
+                      {dictionary.audio.map((item) => (
+                        <label key={item.url} className="flex items-center gap-3 py-1">
+                          <input
+                            type="radio"
+                            name="dictionary-audio"
+                            checked={selectedAudio === item.url}
+                            onChange={() => setSelectedAudio(item.url)}
+                          />
+                          <span>{item.tags.join(', ') || 'Accent unspecified'}</span>
+                          <audio
+                            controls
+                            preload="none"
+                            src={item.url}
+                            aria-label={`Preview ${item.label}`}
+                          />
+                        </label>
+                      ))}
+                    </>
+                  ) : (
+                    <p>No recording found.</p>
+                  )}
+                </>
+              )}
+            </div>
             <Field
               label="IPA"
               value={wordForm.ipa || ''}

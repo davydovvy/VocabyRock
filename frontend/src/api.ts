@@ -14,11 +14,21 @@ export type Word = {
   ipa: string | null
   part_of_speech: string | null
   picture: string | null
+  audio: string | null
+  audio_status?: 'pending' | 'retrying' | 'ready' | 'failed' | null
+  audio_error?: string | null
   example_en: string | null
   example_ru: string | null
   notes: string | null
 }
-export type WordInput = Omit<Word, 'id' | 'picture'>
+export type WordInput = Omit<Word, 'id' | 'picture' | 'audio'> & { audio_url?: string | null }
+export type DictionaryResult = {
+  translations: { word: string; sense: string }[]
+  ipa: string
+  part_of_speech: string
+  us_spelling: string
+  audio: { url: string; label: string; tags: string[] }[]
+}
 export type Pack = {
   id: number
   name: string
@@ -50,6 +60,7 @@ export type Task = {
   prompt?: string | null
   picture?: string | null
   ipa?: string | null
+  audio?: string | null
   hint?: string | null
   speech?: string
   options?: { token: number; text: string }[]

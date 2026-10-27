@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
@@ -18,7 +20,7 @@ from .auth import (
     record_failed_login,
     verify_password,
 )
-from . import pixabay
+from . import audio_jobs, pixabay, wiktapi
 from .config import get_settings
 from .csv_io import HEADERS, export_csv, import_csv, preview_csv
 from .db import get_db
@@ -33,10 +35,24 @@ from .schemas import (
     ResetInput,
     SessionStart,
     SettingsInput,
-    WordInput,
+    WordSaveInput,
 )
 
-app = FastAPI(title="VacabyRock", docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    worker = asyncio.create_task(audio_jobs.run_worker())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+
+app = FastAPI(
+    title="VacabyRock", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan
+)
 AVATARS = ["fox", "bear", "rabbit", "cat", "dog", "owl", "panda", "koala"]
 
 
@@ -186,8 +202,11 @@ def list_words(
 
 
 @app.post("/api/words", status_code=201)
-def add_word(body: WordInput, db: Session = Depends(get_db), _: User = Depends(parent)):
-    word = Word(**body.model_dump())
+def add_word(body: WordSaveInput, db: Session = Depends(get_db), _: User = Depends(parent)):
+    fields = body.model_dump(exclude={"audio_url"})
+    word = Word(**fields)
+    if body.audio_url:
+        audio_jobs.queue_audio(word, body.audio_url)
     db.add(word)
     db.commit()
     db.refresh(word)
@@ -201,11 +220,24 @@ def get_word(word_id: int, db: Session = Depends(get_db), _: User = Depends(curr
 
 @app.put("/api/words/{word_id}")
 def edit_word(
-    word_id: int, body: WordInput, db: Session = Depends(get_db), _: User = Depends(parent)
+    word_id: int, body: WordSaveInput, db: Session = Depends(get_db), _: User = Depends(parent)
 ):
     word = require_word(db, word_id)
-    for key, value in body.model_dump().items():
+    for key, value in body.model_dump(exclude={"audio_url"}).items():
         setattr(word, key, value)
+    if body.audio_url:
+        audio_jobs.queue_audio(word, body.audio_url)
+    db.commit()
+    db.refresh(word)
+    return word
+
+
+@app.post("/api/words/{word_id}/audio/retry")
+def retry_word_audio(word_id: int, db: Session = Depends(get_db), _: User = Depends(parent)):
+    word = require_word(db, word_id)
+    if word.audio_status != "failed" or not word.audio_source_url:
+        raise HTTPException(409, "This word has no failed pronunciation download.")
+    audio_jobs.queue_audio(word, word.audio_source_url)
     db.commit()
     db.refresh(word)
     return word
@@ -214,12 +246,20 @@ def edit_word(
 @app.delete("/api/words/{word_id}")
 def delete_word(word_id: int, db: Session = Depends(get_db), _: User = Depends(parent)):
     word = require_word(db, word_id)
-    remove_picture(word.picture)
+    picture = word.picture
+    audio_path = word.audio
     db.execute(delete(PackWord).where(PackWord.word_id == word_id))
     db.execute(delete(Progress).where(Progress.word_id == word_id))
     db.delete(word)
     db.commit()
+    remove_picture(picture)
+    wiktapi.remove_audio(audio_path)
     return {"ok": True}
+
+
+@app.get("/api/dictionary")
+async def dictionary_lookup(word: str = "", _: User = Depends(parent)):
+    return await wiktapi.lookup(word)
 
 
 @app.post("/api/words/{word_id}/picture")
@@ -575,6 +615,16 @@ def media(name: str):
     if not path.is_file():
         raise HTTPException(404, "Picture not found")
     return FileResponse(path, media_type="image/webp")
+
+
+@app.get("/audio/{name}")
+def audio(name: str):
+    if name != Path(name).name or Path(name).suffix not in {".mp3", ".ogg"}:
+        raise HTTPException(404, "Pronunciation not found")
+    path = get_settings().data_dir / "audio" / name
+    if not path.is_file():
+        raise HTTPException(404, "Pronunciation not found")
+    return FileResponse(path, media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/ogg")
 
 
 dist = get_settings().frontend_dist

@@ -28,11 +28,17 @@ class WordInput(BaseModel):
         return cleaned
 
 
+class WordSaveInput(WordInput):
+    audio_url: str | None = None
+
+
 class WordOut(WordInput):
     model_config = ConfigDict(from_attributes=True)
     id: int
     picture: str | None
     audio: str | None
+    audio_status: str | None
+    audio_error: str | None
     created_at: datetime
     updated_at: datetime
 

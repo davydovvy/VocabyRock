@@ -164,10 +164,32 @@ function mockApi(taskCount = 1) {
         })
       if (path === '/words' && options?.method === 'POST') {
         const input = JSON.parse(String(options.body))
-        const word = { ...input, id: 1, picture: null }
+        const word = {
+          ...input,
+          id: 1,
+          picture: null,
+          audio: null,
+          audio_status: input.audio_url ? 'pending' : null,
+        }
         savedWords.push(word)
         return response(word, 201)
       }
+      if (path === '/dictionary?word=tree')
+        return response({
+          translations: [
+            { word: 'де́рево', sense: 'large woody plant' },
+            { word: 'дре́во', sense: 'poetic' },
+          ],
+          ipa: '/tɹiː/',
+          part_of_speech: 'noun',
+          audio: [
+            {
+              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/tree.mp3',
+              label: 'tree.mp3',
+              tags: ['US'],
+            },
+          ],
+        })
       if (path.startsWith('/pixabay/search?q='))
         return response({
           hits: [
@@ -259,6 +281,34 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     expect(await screen.findByText('tree')).toBeTruthy()
     expect(savedWords[0].translations).toEqual(['дерево'])
+  })
+
+  it('offers dictionary translations and saves the selected recording', async () => {
+    mockApi()
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
+    await user.click(screen.getByRole('button', { name: 'Add Word' }))
+    await user.type(screen.getByLabelText('English'), 'tree')
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    expect(requests.filter((request) => request.startsWith('GET /dictionary'))).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Fill from Wikimedia' }))
+    expect(requests.filter((request) => request.startsWith('GET /dictionary'))).toEqual([
+      'GET /dictionary?word=tree',
+    ])
+    await user.click(await screen.findByRole('button', { name: /де́рево/ }))
+    expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/tɹiː/')
+    await user.click(screen.getByRole('radio', { name: /US/ }))
+    await user.click(screen.getByRole('button', { name: 'Save Word' }))
+    await waitFor(() => expect(savedWords).toHaveLength(1))
+    expect(savedWords[0].translations).toEqual(['де́рево'])
+    expect(
+      (savedWords[0] as (typeof savedWords)[number] & { audio_url: string }).audio_url,
+    ).toContain('upload.wikimedia.org')
+    expect(await screen.findByText('Audio queued for download')).toBeTruthy()
   })
 
   it('lets the parent choose a Pixabay picture for a word', async () => {

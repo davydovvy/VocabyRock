@@ -222,6 +222,7 @@ def create_practice(
                 "english": word.english,
                 "picture": word.picture,
                 "ipa": word.ipa,
+                "audio": word.audio,
                 "hint": word.example_en if direction == "en-ru" else word.example_ru,
             }
             if kind == "listen":
