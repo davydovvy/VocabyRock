@@ -1,0 +1,15 @@
+.git
+.agents
+.aws
+.codex
+.venv
+data
+frontend/node_modules
+frontend/dist
+backend/.pytest_cache
+backend/.ruff_cache
+backend/__pycache__
+*.pyc
+.env
+test-results
+playwright-report

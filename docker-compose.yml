@@ -1,0 +1,23 @@
+services:
+  vacabyrock:
+    build: .
+    image: vacabyrock:local
+    container_name: vacabyrock
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      DATA_DIR: /data
+      FRONTEND_DIST: /app/frontend/dist
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+    volumes:
+      - ${DATA_PATH:-./data}:/data
+    user: "${PUID:-10001}:${PGID:-10001}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

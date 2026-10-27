@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root {
+  font-family: Nunito, 'Trebuchet MS', Arial, sans-serif;
+  color: #27305c;
+  background: #fff8e8;
+  font-synthesis: none;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 10% 3%, #fff1d1 0, transparent 27%),
+    radial-gradient(circle at 92% 24%, #e7dcff 0, transparent 25%), #fff8e8;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+:focus-visible {
+  outline: 4px solid #ffce60;
+  outline-offset: 3px;
+}
+@layer components {
+  .card {
+    @apply bg-white rounded-[2rem] border-2 border-[#ebe6f6] shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3 font-black transition-transform active:translate-y-1 min-h-12 text-center;
+  }
+  .btn-primary {
+    @apply btn bg-violet text-white shadow-[0_5px_0_#5135b3] hover:bg-[#6146c8];
+  }
+  .btn-coral {
+    @apply btn bg-coral text-ink shadow-[0_5px_0_#d75b5b] hover:bg-[#e96764];
+  }
+  .btn-mint {
+    @apply btn bg-mint text-ink shadow-[0_5px_0_#32967e] hover:bg-[#42ad92];
+  }
+  .btn-soft {
+    @apply btn bg-[#f0ebff] text-violet hover:bg-[#e5dcff];
+  }
+  .field {
+    @apply w-full rounded-2xl border-2 border-[#ddd6f3] bg-white px-4 py-3 text-ink focus:border-violet outline-none;
+  }
+  .label {
+    @apply mb-1 block text-sm font-extrabold text-[#616887];
+  }
+  .section-title {
+    @apply text-2xl md:text-3xl font-black tracking-tight;
+  }
+}
+.floaty {
+  animation: floaty 4s ease-in-out infinite;
+}
+.pop {
+  animation: pop 0.35s cubic-bezier(0.2, 1.5, 0.5, 1);
+}
+@keyframes floaty {
+  50% {
+    transform: translateY(-9px);
+  }
+}
+@keyframes pop {
+  from {
+    transform: scale(0.85);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *:before,
+  *:after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
