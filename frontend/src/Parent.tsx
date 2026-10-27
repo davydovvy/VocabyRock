@@ -41,7 +41,24 @@ const blankWord: WordInput = {
   example_ru: '',
   notes: '',
 }
+const partsOfSpeech = [
+  'noun',
+  'verb',
+  'adjective',
+  'adverb',
+  'pronoun',
+  'proper noun',
+  'preposition',
+  'conjunction',
+  'interjection',
+  'determiner',
+  'article',
+  'numeral',
+  'particle',
+  'phrase',
+] as const
 const blankPack = { name: '', description: '', category: '' }
+type PictureChoice = { kind: 'upload'; file: File } | { kind: 'pixabay'; hit: PixabayHit }
 
 export default function Parent({ config, onLogout }: { config: Config; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('overview')
@@ -62,6 +79,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [selectedAudio, setSelectedAudio] = useState('')
   const dictionaryRequest = useRef(0)
   const [showWordForm, setShowWordForm] = useState(false)
+  const [savingWord, setSavingWord] = useState(false)
+  const [pictureChoice, setPictureChoice] = useState<PictureChoice | null>(null)
+  const [showPictureSearch, setShowPictureSearch] = useState(false)
   const [editingPack, setEditingPack] = useState<Pack | null>(null)
   const [packForm, setPackForm] = useState(blankPack)
   const [showPackForm, setShowPackForm] = useState(false)
@@ -75,7 +95,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   } | null>(null)
   const [stats, setStats] = useState<Record<number, Stats>>({})
   const [progressRows, setProgressRows] = useState<Record<number, ProgressRow[]>>({})
-  const [pixabayWord, setPixabayWord] = useState<Word | null>(null)
   const [pixabayQuery, setPixabayQuery] = useState('')
   const [pixabayHits, setPixabayHits] = useState<PixabayHit[] | null>(null)
   const [pixabayBusy, setPixabayBusy] = useState(false)
@@ -145,16 +164,23 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
 
   const openWord = (word?: Word) => {
     dictionaryRequest.current += 1
+    pixabaySearchId.current += 1
     setDictionary(null)
     setDictionaryError('')
     setDictionaryBusy(false)
     setSelectedAudio('')
+    setPictureChoice(null)
+    setShowPictureSearch(false)
+    setPixabayQuery(word?.english.toLowerCase() || '')
+    setPixabayHits(null)
+    setPixabayError('')
+    setPixabayBusy(false)
     setError('')
     setEditingWord(word || null)
     setWordForm(
       word
         ? {
-            english: word.english,
+            english: word.english.toLowerCase(),
             translations: word.translations,
             ipa: word.ipa || '',
             part_of_speech: word.part_of_speech || '',
@@ -164,11 +190,12 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           }
         : blankWord,
     )
-    setTranslations(word?.translations.join('; ') || '')
+    setTranslations(word?.translations.join('; ').toLowerCase() || '')
     setShowWordForm(true)
   }
   const closeWord = () => {
     dictionaryRequest.current += 1
+    pixabaySearchId.current += 1
     setShowWordForm(false)
   }
   const changeEnglish = (value: string) => {
@@ -177,7 +204,8 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionaryError('')
     setDictionaryBusy(false)
     setSelectedAudio('')
-    setWordForm((current) => ({ ...current, english: value }))
+    if (pixabayQuery === wordForm.english) setPixabayQuery(value.toLowerCase())
+    setWordForm((current) => ({ ...current, english: value.toLowerCase() }))
   }
   const lookupDictionary = async () => {
     const word = wordForm.english.trim()
@@ -202,30 +230,65 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     }
   }
   const saveWord = async () => {
+    if (savingWord) return
     const body = {
       ...wordForm,
       translations: translations
         .split(';')
-        .map((s) => s.trim())
+        .map((s) => s.trim().toLowerCase())
         .filter(Boolean),
       audio_url: selectedAudio || null,
     }
-    await run(
-      async () => {
-        await api(
-          editingWord ? `/words/${editingWord.id}` : '/words',
-          json(editingWord ? 'PUT' : 'POST', body),
+    const wasEditing = Boolean(editingWord)
+    const hasAudio = Boolean(selectedAudio)
+    let savedWord: Word | null = null
+    let saveStage: 'word' | 'picture' | 'refresh' = 'word'
+    setSavingWord(true)
+    setError('')
+    setNotice('')
+    try {
+      savedWord = await api<Word>(
+        editingWord ? `/words/${editingWord.id}` : '/words',
+        json(editingWord ? 'PUT' : 'POST', body),
+      )
+      setEditingWord(savedWord)
+      setSelectedAudio('')
+      saveStage = 'picture'
+      if (pictureChoice?.kind === 'upload') {
+        const form = new FormData()
+        form.append('file', pictureChoice.file)
+        const result = await api<{ picture: string }>(`/words/${savedWord.id}/picture`, {
+          method: 'POST',
+          body: form,
+        })
+        setEditingWord({ ...savedWord, picture: result.picture })
+        setPictureChoice(null)
+      } else if (pictureChoice?.kind === 'pixabay') {
+        const result = await api<{ picture: string }>(
+          `/words/${savedWord.id}/pixabay`,
+          json('POST', { image_id: pictureChoice.hit.id }),
         )
-        closeWord()
-      },
-      selectedAudio
-        ? editingWord
-          ? 'Word saved; audio download queued'
-          : 'Word added; audio download queued'
-        : editingWord
-          ? 'Word saved'
-          : 'Word added',
-    )
+        setEditingWord({ ...savedWord, picture: result.picture })
+        setPictureChoice(null)
+      }
+      saveStage = 'refresh'
+      await refresh()
+      closeWord()
+      setNotice(
+        `${wasEditing ? 'Word saved' : 'Word added'}${hasAudio ? '; audio download queued' : ''}`,
+      )
+    } catch (e) {
+      const prefix =
+        saveStage === 'picture'
+          ? 'Word saved, but the picture could not be saved: '
+          : saveStage === 'refresh'
+            ? 'Word saved, but the library could not refresh: '
+            : ''
+      setError(`${prefix}${(e as Error).message}`)
+      if (savedWord) void refresh().catch(() => {})
+    } finally {
+      setSavingWord(false)
+    }
   }
   const deleteWord = (word: Word) => {
     if (window.confirm(`Delete “${word.english}” from the library and all packs?`))
@@ -259,17 +322,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const setPackWords = async (pack: Pack, ids: number[]) => {
     await run(() => api(`/packs/${pack.id}/words`, json('PUT', { word_ids: ids })), 'Pack updated')
   }
-  const uploadPicture = async (type: 'words' | 'packs', id: number, file: File) => {
+  const uploadPackCover = async (id: number, file: File) => {
     const form = new FormData()
     form.append('file', file)
-    await run(
-      () =>
-        api(`/${type}/${id}/${type === 'words' ? 'picture' : 'cover'}`, {
-          method: 'POST',
-          body: form,
-        }),
-      'Picture saved',
-    )
+    await run(() => api(`/packs/${id}/cover`, { method: 'POST', body: form }), 'Picture saved')
   }
   const searchPixabay = async (query: string) => {
     const searchId = ++pixabaySearchId.current
@@ -289,31 +345,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       if (pixabaySearchId.current === searchId) setPixabayError((e as Error).message)
     } finally {
       if (pixabaySearchId.current === searchId) setPixabayBusy(false)
-    }
-  }
-  const openPixabay = (word: Word) => {
-    setPixabayWord(word)
-    setPixabayQuery(word.english)
-    void searchPixabay(word.english)
-  }
-  const closePixabay = () => {
-    pixabaySearchId.current += 1
-    setPixabayWord(null)
-    setPixabayBusy(false)
-  }
-  const choosePixabay = async (imageId: number) => {
-    if (!pixabayWord) return
-    setPixabayBusy(true)
-    setPixabayError('')
-    try {
-      await api(`/words/${pixabayWord.id}/pixabay`, json('POST', { image_id: imageId }))
-      await refresh()
-      closePixabay()
-      setNotice(`Picture saved for ${pixabayWord.english}`)
-    } catch (e) {
-      setPixabayError((e as Error).message)
-    } finally {
-      setPixabayBusy(false)
     }
   }
   const previewFile = async () => {
@@ -400,7 +431,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           </button>
         ))}
       </nav>
-      {error && (
+      {error && !showWordForm && (
         <p role="alert" className="rounded-2xl bg-[#ffe5e3] p-4 mb-5 font-bold text-[#9a4141]">
           {error}
         </p>
@@ -544,26 +575,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                       Retry audio
                     </button>
                   )}
-                  <label className="btn-soft" title="Upload picture">
-                    <ImagePlus size={19} />
-                    <span className="hidden sm:inline">Picture</span>
-                    <input
-                      type="file"
-                      className="sr-only"
-                      accept="image/jpeg,image/png,image/webp"
-                      onChange={(e) => {
-                        if (e.target.files?.[0])
-                          void uploadPicture('words', word.id, e.target.files[0])
-                      }}
-                    />
-                  </label>
-                  <button
-                    className="btn-soft"
-                    aria-label={`Find picture for ${word.english} on Pixabay`}
-                    onClick={() => openPixabay(word)}
-                  >
-                    <Search size={19} /> Pixabay
-                  </button>
                   <button className="btn-soft" onClick={() => openWord(word)}>
                     Edit
                   </button>
@@ -622,8 +633,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                         className="sr-only"
                         accept="image/jpeg,image/png,image/webp"
                         onChange={(e) => {
-                          if (e.target.files?.[0])
-                            void uploadPicture('packs', pack.id, e.target.files[0])
+                          if (e.target.files?.[0]) void uploadPackCover(pack.id, e.target.files[0])
                         }}
                       />
                     </label>
@@ -1083,7 +1093,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             <Field
               label="Russian translations (separate with ;)"
               value={translations}
-              onChange={setTranslations}
+              onChange={(value) => setTranslations(value.toLowerCase())}
             />
             <div className="sm:col-span-2">
               {dictionaryBusy && <p role="status">Looking up dictionary entry…</p>}
@@ -1103,10 +1113,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   {dictionary.translations.length ? (
                     <div className="flex flex-wrap gap-2">
                       {dictionary.translations.map((item, index) => {
+                        const suggestion = item.word.toLowerCase()
                         const selected = translations
                           .split(';')
                           .map((s) => s.trim())
-                          .includes(item.word)
+                          .includes(suggestion)
                         return (
                           <button
                             key={`${item.word}-${item.sense}-${index}`}
@@ -1122,8 +1133,8 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                                   .filter(Boolean)
                                 return (
                                   selected
-                                    ? values.filter((value) => value !== item.word)
-                                    : [...values, item.word]
+                                    ? values.filter((value) => value !== suggestion)
+                                    : [...values, suggestion]
                                 ).join('; ')
                               })
                             }
@@ -1178,40 +1189,179 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
               value={wordForm.ipa || ''}
               onChange={(value) => setWordForm({ ...wordForm, ipa: value })}
             />
-            <Field
-              label="Part of speech"
-              value={wordForm.part_of_speech || ''}
-              onChange={(value) => setWordForm({ ...wordForm, part_of_speech: value })}
-            />
-            <Field
-              label="English example"
-              value={wordForm.example_en || ''}
-              onChange={(value) => setWordForm({ ...wordForm, example_en: value })}
-            />
-            <Field
-              label="Russian example"
-              value={wordForm.example_ru || ''}
-              onChange={(value) => setWordForm({ ...wordForm, example_ru: value })}
-            />
+            <label>
+              <span className="label">Part of speech</span>
+              <select
+                className="field"
+                value={wordForm.part_of_speech || ''}
+                onChange={(event) =>
+                  setWordForm({ ...wordForm, part_of_speech: event.target.value })
+                }
+              >
+                <option value="">Select part of speech</option>
+                {wordForm.part_of_speech &&
+                  !partsOfSpeech.some((part) => part === wordForm.part_of_speech) && (
+                    <option value={wordForm.part_of_speech}>{wordForm.part_of_speech}</option>
+                  )}
+                {partsOfSpeech.map((part) => (
+                  <option key={part} value={part}>
+                    {part}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
-          <div className="mt-4">
-            <Field
-              label="Notes"
-              value={wordForm.notes || ''}
-              onChange={(value) => setWordForm({ ...wordForm, notes: value })}
-            />
-          </div>
+          <section className="mt-6 rounded-2xl border-2 border-[#e5ddf5] p-4">
+            <h3 className="font-black text-lg">Picture</h3>
+            <div className="mt-3 flex flex-wrap items-center gap-4">
+              {pictureChoice?.kind === 'pixabay' || (!pictureChoice && editingWord?.picture) ? (
+                <img
+                  className="h-24 w-24 rounded-2xl object-cover"
+                  src={
+                    pictureChoice?.kind === 'pixabay'
+                      ? pictureChoice.hit.preview_url
+                      : editingWord?.picture || ''
+                  }
+                  alt="Word picture"
+                />
+              ) : (
+                <div
+                  className="h-24 w-24 rounded-2xl bg-[#eee8ff] flex items-center justify-center text-3xl"
+                  aria-hidden="true"
+                >
+                  ✦
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <label className="btn-soft">
+                  <ImagePlus size={19} /> Upload picture
+                  <input
+                    type="file"
+                    className="sr-only"
+                    aria-label="Upload picture"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(event) => {
+                      if (event.target.files?.[0])
+                        setPictureChoice({ kind: 'upload', file: event.target.files[0] })
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn-soft"
+                  disabled={!pixabayQuery.trim() && !wordForm.english.trim()}
+                  onClick={() => {
+                    const searchTerm = pixabayQuery.trim() || wordForm.english.trim()
+                    setPixabayQuery(searchTerm)
+                    setShowPictureSearch(true)
+                    void searchPixabay(searchTerm)
+                  }}
+                >
+                  <Search size={19} /> Search Pixabay
+                </button>
+                {pictureChoice && (
+                  <button type="button" className="btn-soft" onClick={() => setPictureChoice(null)}>
+                    {editingWord?.picture ? 'Keep current picture' : 'Clear picture'}
+                  </button>
+                )}
+              </div>
+            </div>
+            {pictureChoice?.kind === 'upload' && (
+              <p className="mt-2 font-bold">Selected: {pictureChoice.file.name}</p>
+            )}
+            {pictureChoice?.kind === 'pixabay' && (
+              <p className="mt-2 font-bold">Selected Pixabay picture: {pictureChoice.hit.tags}</p>
+            )}
+            {showPictureSearch && (
+              <div className="mt-5">
+                <form
+                  className="flex flex-col sm:flex-row gap-3"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void searchPixabay(pixabayQuery)
+                  }}
+                >
+                  <input
+                    className="field flex-1"
+                    aria-label="Pixabay search"
+                    value={pixabayQuery}
+                    onChange={(event) => setPixabayQuery(event.target.value)}
+                    maxLength={100}
+                  />
+                  <button className="btn-primary" type="submit" disabled={pixabayBusy}>
+                    <Search size={19} /> Search
+                  </button>
+                </form>
+                <p className="mt-3 text-sm font-bold text-[#747995]">
+                  Search results from{' '}
+                  <a
+                    href="https://pixabay.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-violet underline"
+                  >
+                    Pixabay
+                  </a>
+                  . Choose a picture to add when you save this word.
+                </p>
+                {pixabayError && (
+                  <p
+                    role="alert"
+                    className="mt-4 rounded-2xl bg-[#ffe5e3] p-4 font-bold text-coral"
+                  >
+                    {pixabayError}
+                  </p>
+                )}
+                {pixabayBusy && <p className="mt-5 font-bold">Loading pictures…</p>}
+                {pixabayHits && pixabayHits.length === 0 && (
+                  <p className="mt-5 font-bold">No pictures found. Try another search.</p>
+                )}
+                {pixabayHits && pixabayHits.length > 0 && (
+                  <div className="mt-5 grid max-h-72 grid-cols-2 gap-4 overflow-y-auto sm:grid-cols-3">
+                    {pixabayHits.map((hit) => (
+                      <article key={hit.id} className="rounded-2xl border-2 border-[#e5ddf5] p-2">
+                        <img
+                          className="h-28 w-full rounded-xl object-cover"
+                          src={hit.preview_url}
+                          alt={hit.tags || 'Pixabay picture'}
+                          loading="lazy"
+                        />
+                        <button
+                          type="button"
+                          className="btn-mint mt-2 w-full text-sm"
+                          onClick={() => {
+                            setPictureChoice({ kind: 'pixabay', hit })
+                            setShowPictureSearch(false)
+                          }}
+                        >
+                          Choose picture
+                        </button>
+                        <a
+                          className="mt-2 block truncate text-xs font-bold text-violet underline"
+                          href={hit.page_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          Image by {hit.user || 'Pixabay contributor'}
+                        </a>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
           {error && (
             <p role="alert" className="mt-4 font-bold text-coral">
               {error}
             </p>
           )}
           <button
-            disabled={!wordForm.english.trim() || !translations.trim()}
+            disabled={!wordForm.english.trim() || !translations.trim() || savingWord}
             className="btn-primary mt-6"
             onClick={() => void saveWord()}
           >
-            Save Word
+            {savingWord ? 'Saving…' : 'Save Word'}
           </button>
         </Dialog>
       )}
@@ -1251,78 +1401,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           >
             Save Pack
           </button>
-        </Dialog>
-      )}
-      {pixabayWord && (
-        <Dialog title={`Pixabay pictures for ${pixabayWord.english}`} onClose={closePixabay}>
-          <form
-            className="flex flex-col sm:flex-row gap-3"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void searchPixabay(pixabayQuery)
-            }}
-          >
-            <input
-              className="field flex-1"
-              aria-label="Pixabay search"
-              value={pixabayQuery}
-              onChange={(event) => setPixabayQuery(event.target.value)}
-              maxLength={100}
-            />
-            <button className="btn-primary" type="submit" disabled={pixabayBusy}>
-              <Search size={19} /> Search
-            </button>
-          </form>
-          <p className="mt-3 text-sm font-bold text-[#747995]">
-            Search results from{' '}
-            <a
-              href="https://pixabay.com/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-violet underline"
-            >
-              Pixabay
-            </a>
-            . Choose a picture to save it in your word library.
-          </p>
-          {pixabayError && (
-            <p role="alert" className="mt-4 rounded-2xl bg-[#ffe5e3] p-4 font-bold text-coral">
-              {pixabayError}
-            </p>
-          )}
-          {pixabayBusy && <p className="mt-5 font-bold">Loading pictures…</p>}
-          {pixabayHits && pixabayHits.length === 0 && (
-            <p className="mt-5 font-bold">No pictures found. Try another search.</p>
-          )}
-          {pixabayHits && pixabayHits.length > 0 && (
-            <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {pixabayHits.map((hit) => (
-                <article key={hit.id} className="rounded-2xl border-2 border-[#e5ddf5] p-2">
-                  <img
-                    className="h-28 w-full rounded-xl object-cover"
-                    src={hit.preview_url}
-                    alt={hit.tags || 'Pixabay picture'}
-                    loading="lazy"
-                  />
-                  <button
-                    className="btn-mint mt-2 w-full text-sm"
-                    disabled={pixabayBusy}
-                    onClick={() => void choosePixabay(hit.id)}
-                  >
-                    Use picture
-                  </button>
-                  <a
-                    className="mt-2 block truncate text-xs font-bold text-violet underline"
-                    href={hit.page_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Image by {hit.user || 'Pixabay contributor'}
-                  </a>
-                </article>
-              ))}
-            </div>
-          )}
         </Dialog>
       )}
     </Shell>

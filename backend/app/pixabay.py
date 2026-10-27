@@ -129,7 +129,7 @@ async def search_images(query: str) -> dict:
     return {"hits": hits}
 
 
-async def picture_url(image_id: int) -> str:
+async def download_picture(image_id: int) -> bytes:
     data = await _request({"id": str(image_id), "safesearch": "true"})
     hit = next(
         (item for item in data["hits"] if isinstance(item, dict) and item.get("id") == image_id),
@@ -137,10 +137,10 @@ async def picture_url(image_id: int) -> str:
     )
     if hit is None:
         raise HTTPException(404, "Pixabay image not found.")
-    url = hit.get("webformatURL")
+    url = hit.get("previewURL")
     if not isinstance(url, str) or not _pixabay_url(url, IMAGE_HOSTS):
         raise HTTPException(502, "Pixabay returned an invalid image URL.")
-    return url
+    return await download_image(url)
 
 
 async def download_image(url: str) -> bytes:

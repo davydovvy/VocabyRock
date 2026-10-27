@@ -52,6 +52,7 @@ let practiceTasks = [
   },
 ]
 let requests: string[] = []
+let pictureUploadFailures = 0
 let savedWords: {
   id: number
   english: string
@@ -90,6 +91,7 @@ function mockApi(taskCount = 1) {
     },
   ].slice(0, taskCount)
   requests = []
+  pictureUploadFailures = 0
   savedWords = []
   vi.stubGlobal(
     'fetch',
@@ -174,6 +176,10 @@ function mockApi(taskCount = 1) {
         savedWords.push(word)
         return response(word, 201)
       }
+      if (path === '/words/1' && options?.method === 'PUT') {
+        savedWords[0] = { ...savedWords[0], ...JSON.parse(String(options.body)) }
+        return response(savedWords[0])
+      }
       if (path === '/dictionary?word=tree')
         return response({
           translations: [
@@ -205,6 +211,14 @@ function mockApi(taskCount = 1) {
       if (path === '/words/1/pixabay' && options?.method === 'POST') {
         savedWords[0].picture = '/media/tree.webp'
         return response({ picture: '/media/tree.webp' })
+      }
+      if (path === '/words/1/picture' && options?.method === 'POST') {
+        if (pictureUploadFailures > 0) {
+          pictureUploadFailures -= 1
+          return response({ detail: 'Picture upload failed' }, 503)
+        }
+        savedWords[0].picture = '/media/upload.webp'
+        return response({ picture: '/media/upload.webp' })
       }
       if (path === '/words') return response(savedWords)
       return response({ detail: `Unmocked: ${path}` }, 404)
@@ -276,11 +290,61 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
     await user.click(screen.getByRole('button', { name: 'Add Word' }))
+    const partOfSpeech = screen.getByRole('combobox', {
+      name: 'Part of speech',
+    }) as HTMLSelectElement
+    expect(partOfSpeech.value).toBe('')
+    expect(screen.queryByLabelText('English example')).toBeNull()
+    expect(screen.queryByLabelText('Russian example')).toBeNull()
+    expect(screen.queryByLabelText('Notes')).toBeNull()
+    await user.selectOptions(partOfSpeech, 'noun')
     await user.type(screen.getByLabelText('English'), 'tree')
     await user.type(screen.getByLabelText('Russian translations (separate with ;)'), 'дерево')
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     expect(await screen.findByText('tree')).toBeTruthy()
     expect(savedWords[0].translations).toEqual(['дерево'])
+    expect(savedWords[0].part_of_speech).toBe('noun')
+  })
+
+  it('preserves hidden examples, notes, and an imported part of speech when editing', async () => {
+    mockApi()
+    savedWords.push({
+      id: 1,
+      english: 'tree',
+      translations: ['дерево'],
+      ipa: null,
+      part_of_speech: 'prefix',
+      picture: '/media/original.webp',
+      example_en: 'A tall tree.',
+      example_ru: 'Высокое дерево.',
+      notes: 'Imported note',
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const partOfSpeech = screen.getByRole('combobox', {
+      name: 'Part of speech',
+    }) as HTMLSelectElement
+    expect(partOfSpeech.value).toBe('prefix')
+    expect(screen.queryByLabelText('English example')).toBeNull()
+    expect(screen.queryByLabelText('Russian example')).toBeNull()
+    expect(screen.queryByLabelText('Notes')).toBeNull()
+    expect((screen.getByRole('img', { name: 'Word picture' }) as HTMLImageElement).src).toContain(
+      '/media/original.webp',
+    )
+    await user.click(screen.getByRole('button', { name: 'Search Pixabay' }))
+    await user.click(await screen.findByRole('button', { name: 'Choose picture' }))
+    await user.click(screen.getByRole('button', { name: 'Save Word' }))
+    await waitFor(() => expect(requests).toContain('POST /words/1/pixabay'))
+    expect(savedWords[0].example_en).toBe('A tall tree.')
+    expect(savedWords[0].example_ru).toBe('Высокое дерево.')
+    expect(savedWords[0].notes).toBe('Imported note')
+    expect(savedWords[0].part_of_speech).toBe('prefix')
+    expect(savedWords[0].picture).toBe('/media/tree.webp')
   })
 
   it('offers dictionary translations and saves the selected recording', async () => {
@@ -301,6 +365,9 @@ describe('critical child and parent interactions', () => {
     ])
     await user.click(await screen.findByRole('button', { name: /де́рево/ }))
     expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/tɹiː/')
+    expect(
+      (screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement).value,
+    ).toBe('noun')
     await user.click(screen.getByRole('radio', { name: /US/ }))
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     await waitFor(() => expect(savedWords).toHaveLength(1))
@@ -311,7 +378,7 @@ describe('critical child and parent interactions', () => {
     expect(await screen.findByText('Audio queued for download')).toBeTruthy()
   })
 
-  it('lets the parent choose a Pixabay picture for a word', async () => {
+  it('lets the parent choose a Pixabay picture while adding a lowercase word', async () => {
     mockApi()
     const user = userEvent.setup()
     render(<App />)
@@ -320,18 +387,62 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
     await user.click(screen.getByRole('button', { name: 'Add Word' }))
-    await user.type(screen.getByLabelText('English'), 'tree')
-    await user.type(screen.getByLabelText('Russian translations (separate with ;)'), 'дерево')
-    await user.click(screen.getByRole('button', { name: 'Save Word' }))
-    await user.click(
-      await screen.findByRole('button', { name: 'Find picture for tree on Pixabay' }),
+    const dialog = screen.getByRole('dialog', { name: 'Add Word' })
+    await user.type(within(dialog).getByLabelText('English'), 'TrEe')
+    expect((within(dialog).getByLabelText('English') as HTMLInputElement).value).toBe('tree')
+    await user.type(
+      within(dialog).getByLabelText('Russian translations (separate with ;)'),
+      'ДЕРЕВО',
     )
-    const dialog = await screen.findByRole('dialog', { name: 'Pixabay pictures for tree' })
+    expect(
+      (within(dialog).getByLabelText('Russian translations (separate with ;)') as HTMLInputElement)
+        .value,
+    ).toBe('дерево')
+    await user.click(within(dialog).getByRole('button', { name: 'Search Pixabay' }))
     expect(await within(dialog).findByRole('img', { name: 'tree, nature' })).toBeTruthy()
-    await user.click(within(dialog).getByRole('button', { name: 'Use picture' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Choose picture' }))
+    expect(within(dialog).getByText('Selected Pixabay picture: tree, nature')).toBeTruthy()
+    await user.click(within(dialog).getByRole('button', { name: 'Save Word' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(savedWords[0].picture).toBe('/media/tree.webp')
-    expect(requests).toContain('POST /words/1/pixabay')
+    expect(savedWords[0].english).toBe('tree')
+    expect(savedWords[0].translations).toEqual(['дерево'])
+    expect(requests.indexOf('POST /words/1/pixabay')).toBeGreaterThan(
+      requests.indexOf('POST /words'),
+    )
+    expect(screen.queryByRole('button', { name: /Find picture for tree/ })).toBeNull()
+  })
+
+  it('keeps a newly saved word in the edit form if its picture upload fails', async () => {
+    mockApi()
+    pictureUploadFailures = 1
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
+    await user.click(screen.getByRole('button', { name: 'Add Word' }))
+    await user.type(screen.getByLabelText('English'), 'TREE')
+    await user.type(screen.getByLabelText('Russian translations (separate with ;)'), 'ДЕРЕВО')
+    await user.upload(
+      screen.getByLabelText('Upload picture'),
+      new File(['picture bytes'], 'tree.png', { type: 'image/png' }),
+    )
+    expect(screen.getByText('Selected: tree.png')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Save Word' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent',
+      expect.stringContaining('Picture upload failed'),
+    )
+    expect(savedWords).toHaveLength(1)
+    expect(screen.getByRole('dialog', { name: 'Edit Word' })).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Save Word' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(savedWords).toHaveLength(1)
+    expect(savedWords[0].picture).toBe('/media/upload.webp')
+    expect(requests.filter((request) => request === 'POST /words')).toHaveLength(1)
+    expect(requests).toContain('PUT /words/1')
   })
 
   it('shows the same sample pack artwork in the parent area', async () => {

@@ -73,6 +73,7 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
             "hits": [
                 {
                     "id": int(params["id"]),
+                    "previewURL": "https://cdn.pixabay.com/photo/cat_150.jpg",
                     "webformatURL": "https://pixabay.com/get/cat_640.jpg",
                 }
             ]
@@ -83,7 +84,7 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
     image.save(buffer, "PNG")
 
     async def fake_download(url):
-        assert url == "https://pixabay.com/get/cat_640.jpg"
+        assert url == "https://cdn.pixabay.com/photo/cat_150.jpg"
         return buffer.getvalue()
 
     monkeypatch.setattr(pixabay, "_fetch_json", fake_fetch)
@@ -120,7 +121,7 @@ def test_pixabay_rejects_untrusted_download_url(client, monkeypatch):
     get_settings.cache_clear()
 
     async def fake_fetch(_params):
-        return {"hits": [{"id": 99, "webformatURL": "https://evil.example/image.jpg"}]}
+        return {"hits": [{"id": 99, "previewURL": "https://evil.example/image.jpg"}]}
 
     monkeypatch.setattr(pixabay, "_fetch_json", fake_fetch)
 

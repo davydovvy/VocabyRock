@@ -17,12 +17,14 @@ class WordInput(BaseModel):
         cleaned = " ".join(value.split())
         if not cleaned:
             raise ValueError("Add an English word")
-        return cleaned
+        return cleaned.lower()
 
     @field_validator("translations")
     @classmethod
     def clean_translations(cls, value: list[str]):
-        cleaned = list(dict.fromkeys(" ".join(item.split()) for item in value if item.strip()))
+        cleaned = list(
+            dict.fromkeys(" ".join(item.split()).lower() for item in value if item.strip())
+        )
         if not cleaned:
             raise ValueError("Add at least one translation")
         return cleaned

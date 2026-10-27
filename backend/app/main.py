@@ -290,8 +290,7 @@ async def set_pixabay_picture(
     _: User = Depends(parent),
 ):
     word = require_word(db, word_id)
-    url = await pixabay.picture_url(body.image_id)
-    path = save_picture_data(await pixabay.download_image(url))
+    path = save_picture_data(await pixabay.download_picture(body.image_id))
     old_picture = word.picture
     word.picture = path
     try:

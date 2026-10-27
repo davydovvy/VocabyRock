@@ -79,6 +79,37 @@ def test_word_crud_and_shared_pack_membership(client):
     run(scenario())
 
 
+def test_word_inputs_are_lowercase_on_create_edit_and_import(client):
+    async def scenario():
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        created = (
+            await client.post("/api/words", json={"english": " TrEe ", "translations": ["ДЕРЕВО"]})
+        ).json()
+        assert created["english"] == "tree"
+        assert created["translations"] == ["дерево"]
+
+        edited = (
+            await client.put(
+                f"/api/words/{created['id']}",
+                json={"english": "RIVER", "translations": ["РЕКА"]},
+            )
+        ).json()
+        assert edited["english"] == "river"
+        assert edited["translations"] == ["река"]
+
+        content = "english,translations\nLANTERN,ФОНАРЬ\n".encode()
+        preview = (
+            await client.post("/api/import/preview", files={"file": ("words.csv", content)})
+        ).json()
+        assert preview["rows"][0]["data"]["english"] == "lantern"
+        assert preview["rows"][0]["data"]["translations"] == ["фонарь"]
+        imported = (await client.post("/api/import", files={"file": ("words.csv", content)})).json()
+        assert imported["imported"] == 1
+        assert any(word["english"] == "lantern" for word in (await client.get("/api/words")).json())
+
+    run(scenario())
+
+
 def test_csv_preview_duplicate_validation_and_russian(client):
     async def scenario():
         await client.post("/api/auth/parent", json={"password": "test-parent-password"})
