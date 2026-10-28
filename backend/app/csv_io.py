@@ -29,15 +29,8 @@ def preview_csv(text: str, db: Session):
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     if not reader.fieldnames or not {"english", "translations"} <= set(reader.fieldnames):
         return {"rows": [], "errors": ["CSV needs english and translations columns"]}
-    known = [
-        (
-            word.english.casefold().strip(),
-            {translation.casefold().strip() for translation in word.translations},
-            word.id,
-        )
-        for word in db.scalars(select(Word))
-    ]
-    seen: list[tuple[str, set[str]]] = []
+    known = {word.english.casefold().strip(): word.id for word in db.scalars(select(Word))}
+    seen: set[str] = set()
     rows, errors = [], []
     for line, row in enumerate(reader, start=2):
         try:
@@ -50,19 +43,11 @@ def preview_csv(text: str, db: Session):
             ]
             data = WordInput.model_validate(values)
             english = data.english.casefold()
-            translations = {translation.casefold() for translation in data.translations}
-            duplicate = next(
-                (
-                    word_id
-                    for existing, meanings, word_id in known
-                    if existing == english and meanings & translations
-                ),
-                None,
-            )
-            if any(existing == english and meanings & translations for existing, meanings in seen):
+            duplicate = known.get(english)
+            if english in seen:
                 errors.append(f"Line {line}: repeated in this file")
                 continue
-            seen.append((english, translations))
+            seen.add(english)
             rows.append({"line": line, "data": data.model_dump(), "duplicate_id": duplicate})
         except Exception as exc:
             errors.append(f"Line {line}: {exc}")

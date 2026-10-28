@@ -17,7 +17,7 @@ class WordInput(BaseModel):
         cleaned = " ".join(value.split())
         if not cleaned:
             raise ValueError("Add an English word")
-        return cleaned.lower()
+        return cleaned
 
     @field_validator("translations")
     @classmethod
@@ -120,7 +120,9 @@ class SettingsInput(BaseModel):
 class SessionStart(BaseModel):
     pack_id: int | None = None
     mode: str = Field(default="quick", pattern="^(quick|new|practice|hard|all|mistakes)$")
-    kind: str | None = Field(default=None, pattern="^(match|flashcard|choice|type|listen)$")
+    kind: str | None = Field(
+        default=None, pattern="^(match|match_all|flashcard|choice|type|listen)$"
+    )
     direction: str | None = Field(default=None, pattern="^(en-ru|ru-en)$")
     length: int | None = Field(default=None, ge=1, le=30)
     word_ids: list[int] | None = None
@@ -131,6 +133,19 @@ class AnswerInput(BaseModel):
     answer: str | None = None
     option_id: int | None = None
     rating: str | None = Field(default=None, pattern="^(again|hard|easy)$")
+
+
+class HintInput(BaseModel):
+    level: int = Field(ge=1, le=2)
+
+
+class MatchPairInput(BaseModel):
+    index: int = Field(ge=0)
+    option_id: int = Field(ge=0)
+
+
+class MatchAllInput(BaseModel):
+    pairs: list[MatchPairInput]
 
 
 class ResetInput(BaseModel):

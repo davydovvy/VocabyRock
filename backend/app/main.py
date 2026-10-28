@@ -24,11 +24,13 @@ from . import audio_jobs, pixabay, wiktapi
 from .config import get_settings
 from .csv_io import HEADERS, export_csv, import_csv, preview_csv
 from .db import get_db
-from .learning import create_practice, public_session, submit_answer
+from .learning import create_practice, public_session, reveal_hint, submit_all_pairs, submit_answer
 from .media import remove_picture, save_picture, save_picture_data
 from .models import AppSettings, Pack, PackWord, PracticeSession, Progress, User, Word, now
 from .schemas import (
     AnswerInput,
+    HintInput,
+    MatchAllInput,
     PackInput,
     PixabaySelection,
     ProfileInput,
@@ -68,6 +70,24 @@ def require_pack(db: Session, pack_id: int) -> Pack:
     if not pack:
         raise HTTPException(404, "Pack not found")
     return pack
+
+
+def existing_word(db: Session, english: str, exclude_id: int | None = None) -> str | None:
+    normalized = " ".join(english.split()).casefold()
+    return next(
+        (
+            saved_english
+            for word_id, saved_english in db.execute(select(Word.id, Word.english))
+            if word_id != exclude_id and " ".join(saved_english.split()).casefold() == normalized
+        ),
+        None,
+    )
+
+
+def reject_duplicate_word(db: Session, english: str, exclude_id: int | None = None) -> None:
+    duplicate = existing_word(db, english, exclude_id)
+    if duplicate:
+        raise HTTPException(409, f"“{duplicate}” is already in the vocabulary library.")
 
 
 def pack_data(pack: Pack, db: Session, user: User | None = None):
@@ -202,12 +222,32 @@ def list_words(
 
 
 @app.post("/api/words", status_code=201)
-def add_word(body: WordSaveInput, db: Session = Depends(get_db), _: User = Depends(parent)):
+def add_word(
+    body: WordSaveInput,
+    pack_id: int | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(parent),
+):
+    if pack_id is not None:
+        require_pack(db, pack_id)
+    reject_duplicate_word(db, body.english)
     fields = body.model_dump(exclude={"audio_url"})
     word = Word(**fields)
     if body.audio_url:
         audio_jobs.queue_audio(word, body.audio_url)
     db.add(word)
+    if pack_id is not None:
+        db.flush()
+        last_position = db.scalar(
+            select(func.max(PackWord.position)).where(PackWord.pack_id == pack_id)
+        )
+        db.add(
+            PackWord(
+                pack_id=pack_id,
+                word_id=word.id,
+                position=(last_position if last_position is not None else -1) + 1,
+            )
+        )
     db.commit()
     db.refresh(word)
     return word
@@ -223,6 +263,7 @@ def edit_word(
     word_id: int, body: WordSaveInput, db: Session = Depends(get_db), _: User = Depends(parent)
 ):
     word = require_word(db, word_id)
+    reject_duplicate_word(db, body.english, word_id)
     for key, value in body.model_dump(exclude={"audio_url"}).items():
         setattr(word, key, value)
     if body.audio_url:
@@ -464,7 +505,7 @@ def start_practice(body: SessionStart, db: Session = Depends(get_db), user: User
     if body.pack_id is not None:
         require_pack(db, body.pack_id)
     kind = body.kind or "choice"
-    direction = body.direction or settings.direction
+    direction = "en-ru" if kind == "match_all" else body.direction or settings.direction
     practice = create_practice(
         db,
         user,
@@ -512,6 +553,31 @@ def answer_question(
         body.option_id,
         body.rating,
     )
+
+
+@app.post("/api/practice/{session_id}/match-all")
+def check_all_pairs(
+    session_id: int,
+    body: MatchAllInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(child),
+):
+    return submit_all_pairs(
+        db,
+        owned_session(db, session_id, user),
+        [(pair.index, pair.option_id) for pair in body.pairs],
+    )
+
+
+@app.post("/api/practice/{session_id}/hint/{index}")
+def hint_question(
+    session_id: int,
+    index: int,
+    body: HintInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(child),
+):
+    return reveal_hint(db, owned_session(db, session_id, user), index, body.level)
 
 
 @app.get("/api/progress")

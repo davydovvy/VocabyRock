@@ -42,7 +42,7 @@ def test_word_crud_and_shared_pack_membership(client):
         ).json()
         assert word["english"] == "bank"
         second = (
-            await client.post("/api/words", json={"english": "bank", "translations": ["берег"]})
+            await client.post("/api/words", json={"english": "shore", "translations": ["берег"]})
         ).json()
         assert second["id"] != word["id"]
         pack = (
@@ -79,13 +79,64 @@ def test_word_crud_and_shared_pack_membership(client):
     run(scenario())
 
 
-def test_word_inputs_are_lowercase_on_create_edit_and_import(client):
+def test_pack_word_creation_and_duplicate_rejection(client):
+    async def scenario():
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        pack = (await client.post("/api/packs", json={"name": "Mountains"})).json()
+        created = await client.post(
+            f"/api/words?pack_id={pack['id']}",
+            json={"english": "Mountain", "translations": ["гора"]},
+        )
+        assert created.status_code == 201
+        word = created.json()
+        assert (await client.get(f"/api/packs/{pack['id']}")).json()["word_ids"] == [word["id"]]
+
+        duplicate = await client.post(
+            f"/api/words?pack_id={pack['id']}",
+            json={"english": "  mountain  ", "translations": ["холм"]},
+        )
+        assert duplicate.status_code == 409
+        assert "already in the vocabulary library" in duplicate.json()["detail"]
+        direct_duplicate = await client.post(
+            "/api/words", json={"english": "MOUNTAIN", "translations": ["холм"]}
+        )
+        assert direct_duplicate.status_code == 409
+        assert len((await client.get("/api/words")).json()) == 31
+        assert (await client.get(f"/api/packs/{pack['id']}")).json()["word_ids"] == [word["id"]]
+
+        other = (
+            await client.post("/api/words", json={"english": "hill", "translations": ["холм"]})
+        ).json()
+        conflict = await client.put(
+            f"/api/words/{other['id']}",
+            json={"english": "MOUNTAIN", "translations": ["холм"]},
+        )
+        assert conflict.status_code == 409
+        assert (await client.get(f"/api/words/{other['id']}")).json()["english"] == "hill"
+        unchanged = await client.put(
+            f"/api/words/{word['id']}",
+            json={"english": "mountain", "translations": ["гора"]},
+        )
+        assert unchanged.status_code == 200
+        assert unchanged.json()["english"] == "mountain"
+
+        missing_pack = await client.post(
+            "/api/words?pack_id=999999",
+            json={"english": "summit", "translations": ["вершина"]},
+        )
+        assert missing_pack.status_code == 404
+        assert all(word["english"] != "summit" for word in (await client.get("/api/words")).json())
+
+    run(scenario())
+
+
+def test_word_inputs_preserve_english_case_on_create_edit_and_import(client):
     async def scenario():
         await client.post("/api/auth/parent", json={"password": "test-parent-password"})
         created = (
             await client.post("/api/words", json={"english": " TrEe ", "translations": ["ДЕРЕВО"]})
         ).json()
-        assert created["english"] == "tree"
+        assert created["english"] == "TrEe"
         assert created["translations"] == ["дерево"]
 
         edited = (
@@ -94,18 +145,18 @@ def test_word_inputs_are_lowercase_on_create_edit_and_import(client):
                 json={"english": "RIVER", "translations": ["РЕКА"]},
             )
         ).json()
-        assert edited["english"] == "river"
+        assert edited["english"] == "RIVER"
         assert edited["translations"] == ["река"]
 
         content = "english,translations\nLANTERN,ФОНАРЬ\n".encode()
         preview = (
             await client.post("/api/import/preview", files={"file": ("words.csv", content)})
         ).json()
-        assert preview["rows"][0]["data"]["english"] == "lantern"
+        assert preview["rows"][0]["data"]["english"] == "LANTERN"
         assert preview["rows"][0]["data"]["translations"] == ["фонарь"]
         imported = (await client.post("/api/import", files={"file": ("words.csv", content)})).json()
         assert imported["imported"] == 1
-        assert any(word["english"] == "lantern" for word in (await client.get("/api/words")).json())
+        assert any(word["english"] == "LANTERN" for word in (await client.get("/api/words")).json())
 
     run(scenario())
 
@@ -124,11 +175,11 @@ def test_csv_preview_duplicate_validation_and_russian(client):
         overlapping = (
             await client.post(
                 "/api/import/preview",
-                files={"file": ("more.csv", "english,translations\ncat,кошка; кот\n".encode())},
+                files={"file": ("more.csv", "english,translations\nCAT,кот\n".encode())},
             )
         ).json()
         assert overlapping["rows"][0]["duplicate_id"] is not None
-        meanings = (
+        repeated = (
             await client.post(
                 "/api/import/preview",
                 files={
@@ -136,7 +187,8 @@ def test_csv_preview_duplicate_validation_and_russian(client):
                 },
             )
         ).json()
-        assert len(meanings["rows"]) == 2 and not meanings["errors"]
+        assert len(repeated["rows"]) == 1
+        assert "repeated in this file" in repeated["errors"][0]
         imported = (
             await client.post("/api/import", files={"file": ("words.csv", content.encode())})
         ).json()

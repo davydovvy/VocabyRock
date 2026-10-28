@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
   Check,
   CircleHelp,
+  Grid2X2,
   Headphones,
   Heart,
   Home,
@@ -35,6 +36,7 @@ import { animal, Empty, packArt, ProgressBar, Shell, Speak, Star } from './ui'
 const games: { kind: Kind; title: string; icon: typeof Layers3; color: string }[] = [
   { kind: 'choice', title: 'Pick the Word', icon: CircleHelp, color: 'bg-[#d8eaff]' },
   { kind: 'match', title: 'Find Pairs', icon: Shuffle, color: 'bg-[#ffe3e7]' },
+  { kind: 'match_all', title: 'Find Pairs Challenge', icon: Grid2X2, color: 'bg-[#ffd9e0]' },
   { kind: 'flashcard', title: 'Flip Cards', icon: Layers3, color: 'bg-[#e6ddff]' },
   { kind: 'type', title: 'Type It', icon: Keyboard, color: 'bg-[#e1f7e7]' },
   { kind: 'listen', title: 'Listen', icon: Headphones, color: 'bg-[#fff0ca]' },
@@ -361,9 +363,13 @@ export default function Child({
               ))}
             </div>
             <h2 className="mt-9 text-xl font-black">Pick a game</h2>
-            <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               {games
-                .filter((game) => config.allowed_exercises.includes(game.kind))
+                .filter((game) =>
+                  config.allowed_exercises.includes(
+                    game.kind === 'match_all' ? 'match' : game.kind,
+                  ),
+                )
                 .map((game) => (
                   <button
                     disabled={busy}
@@ -408,8 +414,15 @@ export default function Child({
           config={config}
           onHome={goHome}
           onAgain={(mistakes) => {
-            if (mistakes?.length) void start(practice.kind, 'mistakes', pack, mistakes)
-            else void start(practice.kind, practice.mode, pack)
+            if (mistakes?.length)
+              void start(
+                practice.kind === 'match_all' ? 'choice' : practice.kind,
+                'mistakes',
+                pack,
+                mistakes,
+              )
+            else
+              void start(practice.kind, practice.kind === 'match_all' ? 'all' : practice.mode, pack)
           }}
           onUpdate={setPractice}
           onFinish={() => void refresh().catch(() => {})}
@@ -512,13 +525,18 @@ function Game({
     practice.tasks.findIndex((_, i) => !practice.results.some((result) => result.index === i)),
   )
   const [selected, setSelected] = useState<number | null>(null)
+  const [pairings, setPairings] = useState<Record<number, number>>({})
   const [typed, setTyped] = useState('')
+  const [hintLevel, setHintLevel] = useState(0)
+  const [hintText, setHintText] = useState('')
   const [revealed, setRevealed] = useState<string[] | null>(null)
   const [feedback, setFeedback] = useState<{
     correct: boolean
     answer: string | string[]
     retry?: boolean
+    assisted?: boolean
   } | null>(null)
+  const nextButton = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const done = practice.finished
@@ -530,6 +548,7 @@ function Game({
     [practice.results],
   )
   const title = games.find((g) => g.kind === practice.kind)?.title || 'Play'
+  const pairCount = Object.keys(pairings).length
   const submit = async (
     indexToSend: number,
     value?: string,
@@ -544,6 +563,7 @@ function Game({
         retry: boolean
         answer: string | string[]
         finished: boolean
+        assisted: boolean
       }>(
         `/practice/${practice.id}/answer`,
         json('POST', { index: indexToSend, answer: value, option_id: optionId, rating }),
@@ -565,13 +585,70 @@ function Game({
     if (nextIndex >= 0) setIndex(nextIndex)
     setFeedback(null)
     setTyped('')
+    setHintLevel(0)
+    setHintText('')
     setRevealed(null)
     setSelected(null)
   }
+  const showHint = async (level: 1 | 2) => {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await api<{ hint: string }>(
+        `/practice/${practice.id}/hint/${index}`,
+        json('POST', { level }),
+      )
+      setHintText(response.hint)
+      setHintLevel(level)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  useEffect(() => {
+    if (feedback && !busy && practice.kind !== 'match') nextButton.current?.focus()
+  }, [feedback, busy, practice.kind])
   const chooseMatch = (token: number) => {
     if (selected !== null) {
       void submit(selected, undefined, token)
       setSelected(null)
+    }
+  }
+  const chooseChallengeOption = (token: number) => {
+    if (selected === null) return
+    setPairings((current) => {
+      const nextPairings = { ...current }
+      const previousToken = nextPairings[selected]
+      const previousOwner = Object.keys(nextPairings).find(
+        (key) => nextPairings[Number(key)] === token,
+      )
+      nextPairings[selected] = token
+      if (previousOwner !== undefined && Number(previousOwner) !== selected) {
+        if (previousToken === undefined) delete nextPairings[Number(previousOwner)]
+        else nextPairings[Number(previousOwner)] = previousToken
+      }
+      return nextPairings
+    })
+    setSelected(null)
+  }
+  const checkAllPairs = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await api<Practice>(
+        `/practice/${practice.id}/match-all`,
+        json('POST', {
+          pairs: practice.tasks.map((_, index) => ({ index, option_id: pairings[index] })),
+        }),
+      )
+      onUpdate(updated)
+      if (updated.results.some((result) => result.correct)) onSuccess()
+      onFinish()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
   const speech = task?.speech || ''
@@ -592,7 +669,7 @@ function Game({
     if (practice.kind === 'listen' && speech && !feedback && !done) playWord()
   }, [index])
 
-  if (done && (practice.kind === 'match' || !feedback))
+  if (done && (practice.kind === 'match' || practice.kind === 'match_all' || !feedback))
     return (
       <div className="mx-auto max-w-2xl text-center pt-6">
         <div className="text-8xl pop" aria-hidden="true">
@@ -616,7 +693,30 @@ function Game({
               <strong className="block mt-1">+{correctCount * 5 + mistakes.length} XP</strong>
             </div>
           </div>
-          {mistakes.length > 0 && (
+          {practice.kind === 'match_all' && (
+            <div className="mt-6 text-left">
+              <h2 className="font-black mb-3">Your pairs</h2>
+              <div className="grid gap-2">
+                {practice.results.map((result) => (
+                  <div
+                    key={result.index}
+                    className={`rounded-2xl p-3 font-bold ${result.correct ? 'bg-[#e1f8ed]' : 'bg-[#fff0e4]'}`}
+                  >
+                    <span className="font-black">{practice.tasks[result.index]?.prompt}</span>
+                    <span className="mx-2">→</span>
+                    <span>{result.chosen}</span>
+                    {!result.correct && (
+                      <span className="block text-sm mt-1">
+                        Correct:{' '}
+                        {Array.isArray(result.answer) ? result.answer.join(', ') : result.answer}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {practice.kind !== 'match_all' && mistakes.length > 0 && (
             <div className="mt-6 rounded-2xl bg-[#fff0ef] p-4 text-left">
               <p className="font-black mb-2">Words to try again</p>
               {practice.results
@@ -649,9 +749,11 @@ function Game({
     )
   if (!task) return <Empty title="Game is ready" text="Go home and try again" />
   const progressValue =
-    ((practice.kind === 'match'
-      ? practice.results.length
-      : index + (feedback && !feedback.retry ? 1 : 0)) /
+    ((practice.kind === 'match_all'
+      ? pairCount
+      : practice.kind === 'match'
+        ? practice.results.length
+        : index + (feedback && !feedback.retry ? 1 : 0)) /
       practice.tasks.length) *
     100
   return (
@@ -662,8 +764,9 @@ function Game({
         </button>
         <span className="font-black text-violet">{title}</span>
         <span className="font-black">
-          {practice.kind === 'match' ? practice.results.length + 1 : index + 1}/
-          {practice.tasks.length}
+          {practice.kind === 'match_all'
+            ? `${pairCount}/${practice.tasks.length} paired`
+            : `${practice.kind === 'match' ? practice.results.length + 1 : index + 1}/${practice.tasks.length}`}
         </span>
       </div>
       <ProgressBar value={progressValue} />
@@ -672,7 +775,89 @@ function Game({
           {error}
         </p>
       )}
-      {practice.kind === 'match' ? (
+      {practice.kind === 'match_all' ? (
+        <div className="card mt-8 p-4 sm:p-6 md:p-8">
+          <h1 className="text-center section-title">Match all 10 pairs</h1>
+          <p className="mt-2 text-center font-bold text-[#6b7190]">
+            Tap an English word, then its Russian translation. Change any pair before checking.
+          </p>
+          <p
+            role="status"
+            className="sticky top-2 z-10 mt-5 rounded-2xl bg-[#f0eaff] p-3 text-center font-black text-violet shadow-sm"
+          >
+            {selected === null
+              ? `${pairCount} of 10 pairs chosen`
+              : `Choose a Russian translation for ${practice.tasks[selected].prompt}`}
+          </p>
+          <div className="mt-7 grid grid-cols-2 gap-2 sm:gap-4">
+            <div className="space-y-2" role="group" aria-label="English words">
+              <h2 className="mb-3 text-center font-black text-violet">English</h2>
+              {practice.tasks.map((item, i) => {
+                const paired = practice.match_options?.find(
+                  (option) => option.token === pairings[i],
+                )
+                return (
+                  <button
+                    key={i}
+                    disabled={busy}
+                    onClick={() => setSelected(selected === i ? null : i)}
+                    aria-pressed={selected === i}
+                    className={`w-full min-h-20 rounded-2xl border-2 p-2 sm:p-3 text-left font-black break-words ${selected === i ? 'border-violet bg-[#e8dfff]' : paired ? 'border-[#cfc2f6] bg-[#f5f1ff]' : 'border-[#e6dbff] bg-white'}`}
+                  >
+                    <span className="text-xs text-violet">{i + 1}.</span>{' '}
+                    <span className="text-base sm:text-lg">{item.prompt}</span>
+                    {paired && (
+                      <span className="block mt-1 text-sm text-[#686d89]">→ {paired.text}</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="space-y-2" role="group" aria-label="Russian translations">
+              <h2 className="mb-3 text-center font-black text-violet">Russian</h2>
+              {practice.match_options?.map((option) => {
+                const owner = Object.keys(pairings).find(
+                  (key) => pairings[Number(key)] === option.token,
+                )
+                return (
+                  <button
+                    key={option.token}
+                    disabled={selected === null || busy}
+                    onClick={() => chooseChallengeOption(option.token)}
+                    className={`w-full min-h-20 rounded-2xl border-2 p-2 sm:p-3 text-left font-black break-words ${owner === undefined ? 'border-[#ffdfb8] bg-[#fff9ee]' : 'border-[#ffc4ce] bg-[#fff0f2]'} disabled:opacity-100`}
+                  >
+                    {owner !== undefined && (
+                      <span className="mr-2 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-violet px-1 text-xs text-white">
+                        {Number(owner) + 1}
+                      </span>
+                    )}
+                    <span className="text-base sm:text-lg">{option.text}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="mt-5 flex flex-wrap justify-center gap-3">
+            <button
+              className="btn-soft"
+              disabled={busy || pairCount === 0}
+              onClick={() => {
+                setPairings({})
+                setSelected(null)
+              }}
+            >
+              Clear pairs
+            </button>
+            <button
+              className="btn-primary"
+              disabled={busy || pairCount !== practice.tasks.length}
+              onClick={() => void checkAllPairs()}
+            >
+              Check all pairs
+            </button>
+          </div>
+        </div>
+      ) : practice.kind === 'match' ? (
         <div className="card mt-8 p-5 md:p-8">
           <h1 className="text-center section-title">Find the pairs!</h1>
           <div className="mt-7 grid grid-cols-2 gap-4">
@@ -761,7 +946,9 @@ function Game({
                   alt="Word picture"
                 />
               )}
-              {task.ipa && <p className="mt-2 text-violet font-bold">{task.ipa}</p>}
+              {practice.kind !== 'type' && task.ipa && (
+                <p className="mt-2 text-violet font-bold">{task.ipa}</p>
+              )}
               {task.hint && (
                 <p className="mx-auto mt-3 max-w-lg rounded-2xl bg-[#fff4d8] p-3 text-lg font-bold">
                   {task.hint}
@@ -843,29 +1030,70 @@ function Game({
             )}
           {!feedback &&
             (practice.kind === 'type' || (practice.kind === 'listen' && !task.options)) && (
-              <form
-                className="mt-9 flex flex-col sm:flex-row gap-3"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  if (typed.trim()) void submit(index, typed)
-                }}
-              >
-                <input
-                  autoFocus
-                  className="field text-xl flex-1"
-                  value={typed}
-                  onChange={(e) => setTyped(e.target.value)}
-                  placeholder="Type here"
-                  aria-label="Your answer"
-                />
-                <button
-                  disabled={busy || !typed.trim()}
-                  className="btn-primary text-xl"
-                  type="submit"
+              <>
+                {practice.kind === 'type' && (
+                  <div className="mt-7">
+                    <div className="flex flex-wrap justify-center gap-3">
+                      {hintLevel < 1 && (
+                        <button
+                          className="btn-soft"
+                          disabled={busy}
+                          onClick={() => void showHint(1)}
+                        >
+                          First and last letters
+                        </button>
+                      )}
+                      {hintLevel < 2 && (
+                        <button
+                          className="btn-soft"
+                          disabled={busy}
+                          onClick={() => void showHint(2)}
+                        >
+                          Show whole word
+                        </button>
+                      )}
+                    </div>
+                    {hintLevel < 2 && (
+                      <p className="mt-2 text-sm font-bold text-[#9c593a]">
+                        Showing the whole word adds it to mistakes for later practice.
+                      </p>
+                    )}
+                    {hintLevel > 0 && (
+                      <p role="status" className="mt-4 text-2xl font-black text-violet">
+                        {hintText}
+                      </p>
+                    )}
+                    {hintLevel === 2 && (
+                      <p className="mt-2 font-bold text-[#9c593a]">
+                        This word is added to mistakes for later practice.
+                      </p>
+                    )}
+                  </div>
+                )}
+                <form
+                  className="mt-9 flex flex-col sm:flex-row gap-3"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    if (typed.trim()) void submit(index, typed)
+                  }}
                 >
-                  Check
-                </button>
-              </form>
+                  <input
+                    autoFocus
+                    className="field text-xl flex-1"
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    placeholder="Type here"
+                    aria-label="Your answer"
+                  />
+                  <button
+                    disabled={busy || !typed.trim()}
+                    className="btn-primary text-xl"
+                    type="submit"
+                  >
+                    Check
+                  </button>
+                </form>
+              </>
             )}
           {feedback && (
             <div
@@ -874,7 +1102,11 @@ function Game({
             >
               <div className="flex justify-center items-center gap-2">
                 {feedback.correct ? <Check /> : <X />}
-                {feedback.correct ? 'Great!' : 'Try again next time!'}
+                {feedback.correct
+                  ? 'Great!'
+                  : feedback.assisted
+                    ? 'You got it! Practice this word again later.'
+                    : 'Try again next time!'}
               </div>
               <p className="mt-2 text-base">
                 Answer:{' '}
@@ -883,7 +1115,12 @@ function Game({
             </div>
           )}
           {feedback && (
-            <button className="btn-primary mt-6 text-xl px-10" onClick={next} disabled={busy}>
+            <button
+              ref={nextButton}
+              className="btn-primary mt-6 text-xl px-10"
+              onClick={next}
+              disabled={busy}
+            >
               {done ? 'See Stars' : 'Next'} <ArrowRight />
             </button>
           )}

@@ -186,29 +186,42 @@ def create_practice(
     word_ids: list[int] | None = None,
 ):
     settings = db.get(AppSettings, 1)
-    if kind not in settings.allowed_exercises:
+    if ("match" if kind == "match_all" else kind) not in settings.allowed_exercises:
         raise HTTPException(400, "This game is turned off")
+    if kind == "match_all":
+        length = 10
     selected, library = _select_words(db, user, pack_id, mode, direction, length * 4, word_ids)
-    selected = [
-        word for word in selected if _can_ask_unambiguously(word, library, direction, kind)
-    ][:length]
-    if kind in ("match", "choice", "listen") and (kind != "listen" or direction == "en-ru"):
-        selected = _unique_candidates(selected, direction)
+    selected = [word for word in selected if _can_ask_unambiguously(word, library, direction, kind)]
+    if kind == "match_all":
+        selected = _unique_candidates(selected, direction)[:10]
+    else:
+        selected = selected[:length]
+        if kind in ("match", "choice", "listen") and (kind != "listen" or direction == "en-ru"):
+            selected = _unique_candidates(selected, direction)
     if kind == "match":
         selected = selected[:5]
+    if kind == "match_all" and len(selected) < 10:
+        raise HTTPException(
+            400, "Find Pairs Challenge needs 10 different words in this pack and mode"
+        )
     if not selected:
         raise HTTPException(400, "No words are ready. Try another mode or pack")
     tasks = []
-    if kind == "match":
+    if kind in ("match", "match_all"):
+        match_tokens = set()
         for word in selected:
             prompt = word.english if direction == "en-ru" else word.translations[0]
             hint = word.example_en if direction == "en-ru" else word.example_ru
+            token = secrets.randbelow(10**9)
+            while token in match_tokens:
+                token = secrets.randbelow(10**9)
+            match_tokens.add(token)
             tasks.append(
                 {
                     "word_id": word.id,
                     "prompt": f"{prompt} · {hint}" if hint else prompt,
                     "answer": word.translations[0] if direction == "en-ru" else word.english,
-                    "token": secrets.randbelow(900000) + 100000,
+                    "token": token,
                 }
             )
     else:
@@ -264,9 +277,9 @@ def public_session(practice: PracticeSession):
         public = {
             key: value
             for key, value in task.items()
-            if key not in {"word_id", "accepted", "answer", "token", "english"}
+            if key not in {"word_id", "accepted", "answer", "token", "english", "full_hint_used"}
         }
-        if practice.kind == "match":
+        if practice.kind in ("match", "match_all"):
             public["prompt"] = task["prompt"]
         if practice.kind == "listen":
             public["speech"] = task["english"]
@@ -286,11 +299,38 @@ def public_session(practice: PracticeSession):
         "results": practice.results,
         "finished": practice.finished_at is not None,
     }
-    if practice.kind == "match":
+    if practice.kind in ("match", "match_all"):
         options = [{"token": task["token"], "text": task["answer"]} for task in practice.tasks]
         random.Random(practice.id).shuffle(options)
         result["match_options"] = options
     return result
+
+
+def reveal_hint(db: Session, practice: PracticeSession, index: int, level: int):
+    if (
+        practice.kind != "type"
+        or practice.finished_at
+        or not 0 <= index < len(practice.tasks)
+        or any(result["index"] == index for result in practice.results)
+    ):
+        raise HTTPException(400, "Hint is not available")
+    task = practice.tasks[index]
+    answer = task["accepted"][0]
+    if level == 1:
+        letters = [i for i, char in enumerate(answer) if char.isalpha()]
+        visible = {letters[0], letters[-1]} if letters else set()
+        return {
+            "hint": "".join(
+                char if i in visible or not char.isalpha() else "-" for i, char in enumerate(answer)
+            )
+        }
+    if not task.get("full_hint_used"):
+        tasks = list(practice.tasks)
+        tasks[index] = {**task, "full_hint_used": True}
+        practice.tasks = tasks
+        update_progress(db, practice.user_id, task["word_id"], practice.direction, False)
+        db.commit()
+    return {"hint": answer}
 
 
 def submit_answer(
@@ -303,6 +343,8 @@ def submit_answer(
 ):
     if practice.finished_at:
         raise HTTPException(400, "This game is finished")
+    if practice.kind == "match_all":
+        raise HTTPException(400, "Check all pairs together")
     if index >= len(practice.tasks) or any(r["index"] == index for r in practice.results):
         raise HTTPException(400, "This question is not available")
     task = practice.tasks[index]
@@ -321,6 +363,10 @@ def submit_answer(
         )
     else:
         correct = check_text(answer or "", task["accepted"], settings)
+    assisted = practice.kind == "type" and task.get("full_hint_used", False)
+    typed_correctly = correct
+    if assisted:
+        correct = False
     result = {
         "index": index,
         "correct": correct,
@@ -330,7 +376,8 @@ def submit_answer(
     results = list(practice.results)
     results.append(result)
     practice.results = results
-    update_progress(db, practice.user_id, task["word_id"], practice.direction, correct, rating)
+    if not assisted:
+        update_progress(db, practice.user_id, task["word_id"], practice.direction, correct, rating)
     if len(results) == len(practice.tasks):
         practice.finished_at = now()
         user = db.get(User, practice.user_id)
@@ -340,9 +387,45 @@ def submit_answer(
     db.commit()
     return {
         "correct": correct,
+        "assisted": assisted and typed_correctly,
         "retry": False,
         "answer": result["answer"],
         "finished": practice.finished_at is not None,
         "correct_count": sum(r["correct"] for r in results),
         "total": len(practice.tasks),
     }
+
+
+def submit_all_pairs(db: Session, practice: PracticeSession, pairs: list[tuple[int, int]]):
+    if practice.kind != "match_all" or practice.finished_at:
+        raise HTTPException(400, "This challenge is not available")
+    tokens = {task["token"] for task in practice.tasks}
+    if (
+        len(pairs) != len(practice.tasks)
+        or {index for index, _ in pairs} != set(range(len(practice.tasks)))
+        or {token for _, token in pairs} != tokens
+    ):
+        raise HTTPException(400, "Match every word to a different translation before checking")
+    options = {task["token"]: task["answer"] for task in practice.tasks}
+    chosen = dict(pairs)
+    results = [
+        {
+            "index": index,
+            "correct": chosen[index] == task["token"],
+            "answer": task["answer"],
+            "chosen": options[chosen[index]],
+            "word_id": task["word_id"],
+        }
+        for index, task in enumerate(practice.tasks)
+    ]
+    for result in results:
+        update_progress(
+            db, practice.user_id, result["word_id"], practice.direction, result["correct"]
+        )
+    practice.results = results
+    practice.finished_at = now()
+    user = db.get(User, practice.user_id)
+    user.xp += sum(5 if result["correct"] else 1 for result in results)
+    user.stars += max(1, sum(result["correct"] for result in results) // 3)
+    db.commit()
+    return public_session(practice)

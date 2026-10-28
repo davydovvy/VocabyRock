@@ -23,6 +23,7 @@ export type Word = {
 }
 export type WordInput = Omit<Word, 'id' | 'picture' | 'audio'> & { audio_url?: string | null }
 export type DictionaryResult = {
+  word: string
   translations: { word: string; sense: string }[]
   ipa: string
   part_of_speech: string
@@ -54,7 +55,7 @@ export type Config = {
   child_avatar_change: boolean
   avatars: string[]
 }
-export type Kind = 'match' | 'flashcard' | 'choice' | 'type' | 'listen'
+export type Kind = 'match' | 'match_all' | 'flashcard' | 'choice' | 'type' | 'listen'
 export type Mode = 'quick' | 'new' | 'practice' | 'hard' | 'all' | 'mistakes'
 export type Task = {
   prompt?: string | null
@@ -65,7 +66,13 @@ export type Task = {
   speech?: string
   options?: { token: number; text: string }[]
 }
-export type Result = { index: number; correct: boolean; answer: string | string[]; word_id: number }
+export type Result = {
+  index: number
+  correct: boolean
+  answer: string | string[]
+  chosen?: string
+  word_id: number
+}
 export type Practice = {
   id: number
   kind: Kind

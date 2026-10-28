@@ -6,6 +6,7 @@ import {
   Download,
   ImagePlus,
   LayoutDashboard,
+  Pencil,
   Plus,
   Search,
   Settings2,
@@ -59,6 +60,7 @@ const partsOfSpeech = [
 ] as const
 const blankPack = { name: '', description: '', category: '' }
 type PictureChoice = { kind: 'upload'; file: File } | { kind: 'pixabay'; hit: PixabayHit }
+const normalizeEnglish = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
 
 export default function Parent({ config, onLogout }: { config: Config; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('overview')
@@ -71,6 +73,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [query, setQuery] = useState('')
   const [filterPack, setFilterPack] = useState<number | ''>('')
   const [editingWord, setEditingWord] = useState<Word | null>(null)
+  const [wordPack, setWordPack] = useState<Pack | null>(null)
   const [wordForm, setWordForm] = useState<WordInput>(blankWord)
   const [translations, setTranslations] = useState('')
   const [dictionary, setDictionary] = useState<DictionaryResult | null>(null)
@@ -161,8 +164,16 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       ),
     [words, query, filterPack, packs],
   )
+  const duplicateWord = useMemo(() => {
+    const english = normalizeEnglish(wordForm.english)
+    return english
+      ? words.find(
+          (word) => word.id !== editingWord?.id && normalizeEnglish(word.english) === english,
+        )
+      : undefined
+  }, [words, wordForm.english, editingWord])
 
-  const openWord = (word?: Word) => {
+  const openWord = (word?: Word, pack?: Pack) => {
     dictionaryRequest.current += 1
     pixabaySearchId.current += 1
     setDictionary(null)
@@ -171,16 +182,17 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setSelectedAudio('')
     setPictureChoice(null)
     setShowPictureSearch(false)
-    setPixabayQuery(word?.english.toLowerCase() || '')
+    setPixabayQuery(word?.english || '')
     setPixabayHits(null)
     setPixabayError('')
     setPixabayBusy(false)
     setError('')
     setEditingWord(word || null)
+    setWordPack(pack || null)
     setWordForm(
       word
         ? {
-            english: word.english.toLowerCase(),
+            english: word.english,
             translations: word.translations,
             ipa: word.ipa || '',
             part_of_speech: word.part_of_speech || '',
@@ -197,6 +209,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     dictionaryRequest.current += 1
     pixabaySearchId.current += 1
     setShowWordForm(false)
+    setWordPack(null)
   }
   const changeEnglish = (value: string) => {
     dictionaryRequest.current += 1
@@ -204,8 +217,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionaryError('')
     setDictionaryBusy(false)
     setSelectedAudio('')
-    if (pixabayQuery === wordForm.english) setPixabayQuery(value.toLowerCase())
-    setWordForm((current) => ({ ...current, english: value.toLowerCase() }))
+    setError('')
+    if (pixabayQuery === wordForm.english) setPixabayQuery(value)
+    setWordForm((current) => ({ ...current, english: value }))
   }
   const lookupDictionary = async () => {
     const word = wordForm.english.trim()
@@ -220,6 +234,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       setDictionary(result)
       setWordForm((current) => ({
         ...current,
+        english: result.word || current.english,
         ipa: current.ipa || result.ipa,
         part_of_speech: current.part_of_speech || result.part_of_speech,
       }))
@@ -230,7 +245,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     }
   }
   const saveWord = async () => {
-    if (savingWord) return
+    if (savingWord || duplicateWord) return
     const body = {
       ...wordForm,
       translations: translations
@@ -248,7 +263,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setNotice('')
     try {
       savedWord = await api<Word>(
-        editingWord ? `/words/${editingWord.id}` : '/words',
+        editingWord
+          ? `/words/${editingWord.id}`
+          : wordPack
+            ? `/words?pack_id=${wordPack.id}`
+            : '/words',
         json(editingWord ? 'PUT' : 'POST', body),
       )
       setEditingWord(savedWord)
@@ -275,7 +294,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       await refresh()
       closeWord()
       setNotice(
-        `${wasEditing ? 'Word saved' : 'Word added'}${hasAudio ? '; audio download queued' : ''}`,
+        `${wasEditing ? 'Word saved' : wordPack ? `Word added to ${wordPack.name}` : 'Word added'}${hasAudio ? '; audio download queued' : ''}`,
       )
     } catch (e) {
       const prefix =
@@ -539,51 +558,67 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
               ))}
             </select>
           </div>
-          <div className="grid gap-3">
+          <div className="vocabulary-grid">
             {filteredWords.map((word) => (
-              <article key={word.id} className="card p-4 flex flex-wrap items-center gap-4">
-                <div className="h-16 w-16 rounded-2xl bg-[#eee8ff] flex items-center justify-center overflow-hidden text-3xl">
-                  {word.picture ? (
-                    <img className="h-full w-full object-cover" src={word.picture} alt="" />
-                  ) : (
-                    '✦'
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-black text-xl">
-                    {word.english} <span className="text-sm font-bold text-violet">{word.ipa}</span>
-                  </h3>
-                  <p className="text-[#747995] font-bold">{word.translations.join(' · ')}</p>
+              <article key={word.id} className="card vocabulary-card min-w-0 rounded-3xl p-3">
+                <div className="min-w-0 flex flex-col">
+                  <div className="flex items-start gap-3">
+                    <div className="h-12 w-12 shrink-0 rounded-xl bg-[#eee8ff] flex items-center justify-center overflow-hidden text-2xl">
+                      {word.picture ? (
+                        <img className="h-full w-full object-cover" src={word.picture} alt="" />
+                      ) : (
+                        '✦'
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-black leading-tight break-words">{word.english}</h3>
+                      {word.ipa && (
+                        <p className="text-xs font-bold text-violet break-words">{word.ipa}</p>
+                      )}
+                    </div>
+                  </div>
+                  <p className="mt-2 text-sm leading-snug text-[#747995] font-bold break-words">
+                    {word.translations.join(' · ')}
+                  </p>
                   {word.audio_status === 'pending' && (
-                    <p className="text-sm font-bold text-violet">Audio queued for download</p>
+                    <p className="mt-2 text-xs font-bold text-violet">Audio queued for download</p>
                   )}
                   {word.audio_status === 'retrying' && (
-                    <p className="text-sm font-bold text-violet">Audio retry scheduled</p>
+                    <p className="mt-2 text-xs font-bold text-violet">Audio retry scheduled</p>
                   )}
                   {word.audio_status === 'ready' && (
-                    <p className="text-sm font-bold text-violet">Audio available offline</p>
+                    <p className="mt-2 text-xs font-bold text-violet">Audio available offline</p>
                   )}
                   {word.audio_status === 'failed' && (
-                    <p className="text-sm font-bold text-coral">
+                    <p className="mt-2 text-xs font-bold text-coral break-words">
                       Audio download failed{word.audio_error ? `: ${word.audio_error}` : ''}
                     </p>
                   )}
-                </div>
-                <div className="flex gap-2">
                   {word.audio_status === 'failed' && (
-                    <button className="btn-soft" onClick={() => void retryAudio(word)}>
+                    <button
+                      className="btn-soft !min-h-10 !px-3 !py-1 text-sm mt-auto self-start"
+                      onClick={() => void retryAudio(word)}
+                    >
                       Retry audio
                     </button>
                   )}
-                  <button className="btn-soft" onClick={() => openWord(word)}>
-                    Edit
+                </div>
+                <div className="flex flex-col justify-between gap-2">
+                  <button
+                    className="btn-soft !min-h-10 !w-10 !p-0"
+                    aria-label={`Edit ${word.english}`}
+                    title={`Edit ${word.english}`}
+                    onClick={() => openWord(word)}
+                  >
+                    <Pencil size={17} />
                   </button>
                   <button
-                    className="btn-soft text-coral"
+                    className="btn-soft !min-h-10 !w-10 !p-0 text-coral"
                     aria-label={`Delete ${word.english}`}
+                    title={`Delete ${word.english}`}
                     onClick={() => deleteWord(word)}
                   >
-                    <Trash2 size={19} />
+                    <Trash2 size={17} />
                   </button>
                 </div>
               </article>
@@ -658,11 +693,20 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           </div>
           {selectedPack && (
             <div className="card mt-7 p-6">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-xl font-black">{selectedPack.name} words</h3>
-                <button className="btn-soft" onClick={() => setSelectedPack(null)}>
-                  <X size={18} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button className="btn-primary" onClick={() => openWord(undefined, selectedPack)}>
+                    <Plus size={18} /> New Word
+                  </button>
+                  <button
+                    className="btn-soft"
+                    aria-label="Close pack words"
+                    onClick={() => setSelectedPack(null)}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <select
@@ -697,48 +741,74 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   const word = words.find((w) => w.id === id)
                   if (!word) return null
                   return (
-                    <div className="rounded-2xl bg-[#f8f6ff] p-3 flex items-center gap-3" key={id}>
-                      <span className="font-black text-violet w-6">{index + 1}</span>
-                      <span className="flex-1 font-bold">
-                        {word.english}{' '}
-                        <span className="text-[#7a80a0]">— {word.translations.join(', ')}</span>
-                      </span>
-                      <button
-                        disabled={index === 0}
-                        className="btn-soft !p-2"
-                        aria-label={`Move ${word.english} up`}
-                        onClick={() => {
-                          const ids = [...selectedPack.word_ids]
-                          ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
-                          void setPackWords(selectedPack, ids)
-                        }}
-                      >
-                        <ArrowUp size={18} />
-                      </button>
-                      <button
-                        disabled={index === selectedPack.word_ids.length - 1}
-                        className="btn-soft !p-2"
-                        aria-label={`Move ${word.english} down`}
-                        onClick={() => {
-                          const ids = [...selectedPack.word_ids]
-                          ;[ids[index + 1], ids[index]] = [ids[index], ids[index + 1]]
-                          void setPackWords(selectedPack, ids)
-                        }}
-                      >
-                        <ArrowDown size={18} />
-                      </button>
-                      <button
-                        className="btn-soft !p-2 text-coral"
-                        aria-label={`Remove ${word.english}`}
-                        onClick={() =>
-                          void setPackWords(
-                            selectedPack,
-                            selectedPack.word_ids.filter((x) => x !== id),
-                          )
-                        }
-                      >
-                        <X size={18} />
-                      </button>
+                    <div
+                      className="rounded-2xl bg-[#f8f6ff] p-3 flex flex-wrap items-center gap-3"
+                      key={id}
+                    >
+                      <span className="w-6 shrink-0 font-black text-violet">{index + 1}</span>
+                      <div className="h-12 w-12 shrink-0 rounded-xl bg-[#eee8ff] flex items-center justify-center overflow-hidden text-2xl">
+                        {word.picture ? (
+                          <img className="h-full w-full object-cover" src={word.picture} alt="" />
+                        ) : (
+                          '✦'
+                        )}
+                      </div>
+                      <div className="min-w-32 flex-1">
+                        <p className="font-black leading-tight break-words">
+                          {word.english}
+                          {word.ipa && (
+                            <span className="ml-2 text-sm font-bold text-violet">{word.ipa}</span>
+                          )}
+                        </p>
+                        <p className="text-sm font-bold text-[#7a80a0] break-words">
+                          {word.translations.join(', ')}
+                        </p>
+                      </div>
+                      <div className="ml-auto flex shrink-0 gap-1 sm:gap-2">
+                        <button
+                          className="btn-soft !min-h-10 !w-10 !p-0"
+                          aria-label={`Edit ${word.english}`}
+                          onClick={() => openWord(word, selectedPack)}
+                        >
+                          <Pencil size={18} />
+                        </button>
+                        <button
+                          disabled={index === 0}
+                          className="btn-soft !min-h-10 !w-10 !p-0"
+                          aria-label={`Move ${word.english} up`}
+                          onClick={() => {
+                            const ids = [...selectedPack.word_ids]
+                            ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
+                            void setPackWords(selectedPack, ids)
+                          }}
+                        >
+                          <ArrowUp size={18} />
+                        </button>
+                        <button
+                          disabled={index === selectedPack.word_ids.length - 1}
+                          className="btn-soft !min-h-10 !w-10 !p-0"
+                          aria-label={`Move ${word.english} down`}
+                          onClick={() => {
+                            const ids = [...selectedPack.word_ids]
+                            ;[ids[index + 1], ids[index]] = [ids[index], ids[index + 1]]
+                            void setPackWords(selectedPack, ids)
+                          }}
+                        >
+                          <ArrowDown size={18} />
+                        </button>
+                        <button
+                          className="btn-soft !min-h-10 !w-10 !p-0 text-coral"
+                          aria-label={`Remove ${word.english}`}
+                          onClick={() =>
+                            void setPackWords(
+                              selectedPack,
+                              selectedPack.word_ids.filter((x) => x !== id),
+                            )
+                          }
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
                     </div>
                   )
                 })}
@@ -1077,7 +1147,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         </div>
       )}
       {showWordForm && (
-        <Dialog title={editingWord ? 'Edit Word' : 'Add Word'} onClose={closeWord}>
+        <Dialog
+          title={editingWord ? 'Edit Word' : wordPack ? `Add Word to ${wordPack.name}` : 'Add Word'}
+          onClose={closeWord}
+        >
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="English" value={wordForm.english} onChange={changeEnglish} />
             <div className="flex items-end">
@@ -1090,6 +1163,14 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                 {dictionaryBusy ? 'Looking up…' : 'Fill from Wikimedia'}
               </button>
             </div>
+            {duplicateWord && (
+              <p role="alert" className="sm:col-span-2 font-bold text-coral">
+                “{duplicateWord.english}” is already in the vocabulary library.
+                {wordPack && !wordPack.word_ids.includes(duplicateWord.id)
+                  ? ' Choose it from the existing-word list in this pack.'
+                  : ''}
+              </p>
+            )}
             <Field
               label="Russian translations (separate with ;)"
               value={translations}
@@ -1357,7 +1438,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             </p>
           )}
           <button
-            disabled={!wordForm.english.trim() || !translations.trim() || savingWord}
+            disabled={
+              !wordForm.english.trim() || !translations.trim() || savingWord || !!duplicateWord
+            }
             className="btn-primary mt-6"
             onClick={() => void saveWord()}
           >

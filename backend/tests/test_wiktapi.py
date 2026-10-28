@@ -59,6 +59,7 @@ def test_dictionary_lookup_prefers_us_and_saves_offline_audio(
         assert (await client.get("/api/dictionary?word=tree")).status_code == 401
         await client.post("/api/auth/parent", json={"password": "test-parent-password"})
         lookup = (await client.get("/api/dictionary?word=tree")).json()
+        assert lookup["word"] == "tree"
         assert lookup["ipa"] == "/US/"
         assert lookup["part_of_speech"] == "noun"
         assert lookup["us_spelling"] == "treez"
@@ -124,6 +125,112 @@ def test_dictionary_lookup_prefers_us_and_saves_offline_audio(
 
 def test_us_accent_tags_include_california():
     assert wiktapi._priority(["California"]) < wiktapi._priority(["London"])
+
+
+def test_dictionary_lookup_resolves_case_insensitive_headwords(client, monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(str(request.url))
+        word = request.url.path.rsplit("/", 1)[-1]
+        if request.url.path.endswith("/search"):
+            if request.url.params["q"].casefold() == "january":
+                results = [
+                    {"word": "Januaryish", "lang_code": "en"},
+                    {"word": "January", "lang_code": "en"},
+                    {"word": "january", "lang_code": "fr"},
+                ]
+            else:
+                results = [{"word": request.url.params["q"].capitalize(), "lang_code": "en"}]
+                if request.url.params["q"].casefold() == "mountain":
+                    results = [{"word": "mountain", "lang_code": "en"}]
+            return httpx.Response(
+                200,
+                json={"results": results},
+            )
+        if word == "January":
+            return httpx.Response(200, json={"word": "January", "entries": [{"pos": "name"}]})
+        if word == "Mountain":
+            return httpx.Response(200, json={"word": "Mountain", "entries": [{"pos": "name"}]})
+        if word == "mountain":
+            return httpx.Response(
+                200,
+                json={
+                    "word": "mountain",
+                    "entries": [
+                        {"pos": "noun", "translations": [{"lang_code": "ru", "word": "гора"}]}
+                    ],
+                },
+            )
+        if word == "Monk":
+            return httpx.Response(200, json={"word": "Monk", "entries": [{"pos": "name"}]})
+        if word == "monk":
+            return httpx.Response(
+                200,
+                json={
+                    "word": "monk",
+                    "entries": [
+                        {"pos": "noun", "translations": [{"lang_code": "ru", "word": "монах"}]}
+                    ],
+                },
+            )
+        if word == "Germany":
+            return httpx.Response(200, json={"word": "Germany", "entries": [{"pos": "name"}]})
+        if word == "Turkey":
+            return httpx.Response(
+                200,
+                json={
+                    "word": "Turkey",
+                    "entries": [
+                        {"pos": "name", "translations": [{"lang_code": "ru", "word": "Турция"}]}
+                    ],
+                },
+            )
+        if word == "turkey":
+            return httpx.Response(
+                200,
+                json={
+                    "word": "turkey",
+                    "entries": [
+                        {"pos": "noun", "translations": [{"lang_code": "ru", "word": "индейка"}]}
+                    ],
+                },
+            )
+        return httpx.Response(404)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        wiktapi.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+
+    async def scenario():
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        january = (await client.get("/api/dictionary?word=jAnUaRy")).json()
+        assert january["word"] == "January"
+        assert january["part_of_speech"] == "name"
+        assert requests[-1].endswith("/word/January?lang=en")
+
+        mountain = (await client.get("/api/dictionary?word=Mountain")).json()
+        assert mountain["word"] == "mountain"
+        assert mountain["part_of_speech"] == "noun"
+        assert mountain["translations"][0]["word"] == "гора"
+        assert requests[-1].endswith("/word/mountain?lang=en")
+
+        monk = (await client.get("/api/dictionary?word=Monk")).json()
+        assert monk["word"] == "monk"
+        assert monk["translations"][0]["word"] == "монах"
+        assert requests[-1].endswith("/word/monk?lang=en")
+
+        germany = (await client.get("/api/dictionary?word=GERMANY")).json()
+        assert germany["word"] == "Germany"
+
+        turkey = (await client.get("/api/dictionary?word=Turkey")).json()
+        assert turkey["word"] == "Turkey"
+        assert turkey["translations"][0]["word"] == "Турция"
+
+    run(scenario())
 
 
 def test_failed_audio_can_be_requeued(client, database, monkeypatch):
