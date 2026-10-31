@@ -9,6 +9,7 @@ export type Profile = {
 }
 export type Word = {
   id: number
+  guid: string
   english: string
   translations: string[]
   ipa: string | null
@@ -21,7 +22,9 @@ export type Word = {
   example_ru: string | null
   notes: string | null
 }
-export type WordInput = Omit<Word, 'id' | 'picture' | 'audio'> & { audio_url?: string | null }
+export type WordInput = Omit<Word, 'id' | 'guid' | 'picture' | 'audio'> & {
+  audio_url?: string | null
+}
 export type DictionaryResult = {
   word: string
   translations: { word: string; sense: string }[]
@@ -32,6 +35,7 @@ export type DictionaryResult = {
 }
 export type Pack = {
   id: number
+  guid: string
   name: string
   description: string
   category: string | null
@@ -39,6 +43,7 @@ export type Pack = {
   word_ids: number[]
   word_count: number
   learned_count: number
+  learned: boolean
 }
 export type PixabayHit = {
   id: number
@@ -56,7 +61,7 @@ export type Config = {
   avatars: string[]
 }
 export type Kind = 'match' | 'match_all' | 'flashcard' | 'choice' | 'type' | 'listen'
-export type Mode = 'quick' | 'new' | 'practice' | 'hard' | 'all' | 'mistakes'
+export type Mode = 'quick' | 'new' | 'practice' | 'hard' | 'all' | 'mistakes' | 'test'
 export type Task = {
   prompt?: string | null
   picture?: string | null
@@ -65,6 +70,9 @@ export type Task = {
   hint?: string | null
   speech?: string
   options?: { token: number; text: string }[]
+  big_match?: boolean
+  locked?: boolean
+  last_token?: number
 }
 export type Result = {
   index: number
@@ -103,6 +111,8 @@ export type ProgressRow = {
   correct: number
   incorrect: number
   status: 'new' | 'learning' | 'review' | 'mastered'
+  typed_streak: number
+  learned: boolean
   next_review_at: string | null
 }
 export type Settings = {
@@ -154,6 +164,8 @@ export async function download(path: string, name: string) {
   const link = document.createElement('a')
   link.href = url
   link.download = name
+  document.body.append(link)
   link.click()
-  URL.revokeObjectURL(url)
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

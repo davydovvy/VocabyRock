@@ -130,7 +130,7 @@ def test_pack_word_creation_and_duplicate_rejection(client):
     run(scenario())
 
 
-def test_word_inputs_preserve_english_case_on_create_edit_and_import(client):
+def test_word_inputs_preserve_english_case_on_create_and_edit(client):
     async def scenario():
         await client.post("/api/auth/parent", json={"password": "test-parent-password"})
         created = (
@@ -147,68 +147,6 @@ def test_word_inputs_preserve_english_case_on_create_edit_and_import(client):
         ).json()
         assert edited["english"] == "RIVER"
         assert edited["translations"] == ["река"]
-
-        content = "english,translations\nLANTERN,ФОНАРЬ\n".encode()
-        preview = (
-            await client.post("/api/import/preview", files={"file": ("words.csv", content)})
-        ).json()
-        assert preview["rows"][0]["data"]["english"] == "LANTERN"
-        assert preview["rows"][0]["data"]["translations"] == ["фонарь"]
-        imported = (await client.post("/api/import", files={"file": ("words.csv", content)})).json()
-        assert imported["imported"] == 1
-        assert any(word["english"] == "LANTERN" for word in (await client.get("/api/words")).json())
-
-    run(scenario())
-
-
-def test_csv_preview_duplicate_validation_and_russian(client):
-    async def scenario():
-        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
-        content = "english,translations,ipa\ncat,кошка,/kæt/\nhello,привет; здравствуй,/həˈloʊ/\n"
-        preview = (
-            await client.post(
-                "/api/import/preview", files={"file": ("words.csv", content.encode())}
-            )
-        ).json()
-        assert preview["rows"][0]["duplicate_id"] is not None
-        assert preview["rows"][1]["data"]["translations"] == ["привет", "здравствуй"]
-        overlapping = (
-            await client.post(
-                "/api/import/preview",
-                files={"file": ("more.csv", "english,translations\nCAT,кот\n".encode())},
-            )
-        ).json()
-        assert overlapping["rows"][0]["duplicate_id"] is not None
-        repeated = (
-            await client.post(
-                "/api/import/preview",
-                files={
-                    "file": ("bank.csv", "english,translations\nbank,банк\nbank,берег\n".encode())
-                },
-            )
-        ).json()
-        assert len(repeated["rows"]) == 1
-        assert "repeated in this file" in repeated["errors"][0]
-        imported = (
-            await client.post("/api/import", files={"file": ("words.csv", content.encode())})
-        ).json()
-        assert imported["imported"] == 1
-        exported = (await client.get("/api/export")).text
-        assert "привет; здравствуй" in exported
-        bad = (
-            await client.post(
-                "/api/import/preview",
-                files={"file": ("bad.csv", b"english,translations\nmissing,\n")},
-            )
-        ).json()
-        assert bad["errors"]
-        extra = (
-            await client.post(
-                "/api/import/preview",
-                files={"file": ("extra.csv", b"english,translations\nword,translation,extra\n")},
-            )
-        ).json()
-        assert "too many columns" in extra["errors"][0]
 
     run(scenario())
 
@@ -247,5 +185,14 @@ def test_picture_upload_validation_and_media(client):
         assert served.status_code == 200 and served.headers["content-type"] == "image/webp"
         with Image.open(io.BytesIO(served.content)) as thumbnail:
             assert max(thumbnail.size) == 640
+        child = next(p for p in (await client.get("/api/profiles")).json() if p["role"] == "child")
+        await client.post("/api/auth/child", json={"user_id": child["id"]})
+        assert (await client.delete(f"/api/words/{word['id']}/picture")).status_code == 403
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        cleared = await client.delete(f"/api/words/{word['id']}/picture")
+        assert cleared.status_code == 200 and cleared.json() == {"picture": None}
+        assert (await client.get(f"/api/words/{word['id']}")).json()["picture"] is None
+        assert (await client.get(picture)).status_code == 404
+        assert (await client.delete(f"/api/words/{word['id']}/picture")).json() == {"picture": None}
 
     run(scenario())

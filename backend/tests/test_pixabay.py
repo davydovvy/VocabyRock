@@ -36,6 +36,12 @@ def test_pixabay_requires_parent_and_api_key(client):
         child = next(profile for profile in profiles if profile["role"] == "child")
         await client.post("/api/auth/child", json={"user_id": child["id"]})
         assert (await client.get("/api/pixabay/search?q=cat")).status_code == 403
+        assert (
+            await client.get(
+                "/api/pixabay/preview",
+                params={"url": "https://cdn.pixabay.com/photo/cat_150.jpg"},
+            )
+        ).status_code == 403
         await client.post("/api/auth/parent", json={"password": "test-parent-password"})
         missing = await client.get("/api/pixabay/search?q=cat")
         assert missing.status_code == 503
@@ -58,6 +64,7 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
                     {
                         "id": 42,
                         "previewURL": "https://cdn.pixabay.com/photo/cat_150.jpg",
+                        "webformatURL": "https://pixabay.com/get/cat_640.jpg",
                         "pageURL": "https://pixabay.com/photos/cat-42/",
                         "tags": "cat, pet",
                         "user": "Contributor",
@@ -65,6 +72,7 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
                     {
                         "id": 43,
                         "previewURL": "https://other.example/cat.jpg",
+                        "webformatURL": "https://other.example/cat_640.jpg",
                         "pageURL": "https://pixabay.com/photos/other-43/",
                     },
                 ]
@@ -82,9 +90,11 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
     image = Image.new("RGB", (800, 500), "orange")
     buffer = io.BytesIO()
     image.save(buffer, "PNG")
+    downloads = []
 
     async def fake_download(url):
-        assert url == "https://cdn.pixabay.com/photo/cat_150.jpg"
+        assert url == "https://pixabay.com/get/cat_640.jpg"
+        downloads.append(url)
         return buffer.getvalue()
 
     monkeypatch.setattr(pixabay, "_fetch_json", fake_fetch)
@@ -97,8 +107,21 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
         assert first == second
         assert len(first["hits"]) == 1
         assert first["hits"][0]["id"] == 42
+        preview_url = first["hits"][0]["preview_url"]
+        assert preview_url.startswith("/api/pixabay/preview?url=")
+        assert "pixabay.com%2Fget%2Fcat_640.jpg" in preview_url
+        preview = await client.get(preview_url)
+        assert preview.status_code == 200
+        assert preview.headers["content-type"] == "image/webp"
+        assert Image.open(io.BytesIO(preview.content)).format == "WEBP"
+        assert (await client.get(preview_url)).content == preview.content
+        assert len(downloads) == 1
         assert len(requests) == 1
         assert list((tmp_path / "pixabay-cache").glob("*.json"))
+        assert len(list((tmp_path / "pixabay-cache" / "previews").glob("*.webp"))) == 1
+        assert (
+            await client.get("/api/pixabay/preview", params={"url": "https://evil.example/a.jpg"})
+        ).status_code == 400
 
         word = (
             await client.post("/api/words", json={"english": "tree", "translations": ["дерево"]})
@@ -111,7 +134,8 @@ def test_pixabay_search_cache_and_local_picture(client, monkeypatch, tmp_path):
         assert served.status_code == 200
         assert served.headers["content-type"] == "image/webp"
         assert (await client.get(f"/api/words/{word['id']}")).json()["picture"] == picture
-        assert requests[-1] == {"id": "42", "safesearch": "true"}
+        assert len(downloads) == 1
+        assert requests == [{"q": "cat", "safesearch": "true", "per_page": "12"}]
 
     run(scenario())
 
@@ -121,7 +145,7 @@ def test_pixabay_rejects_untrusted_download_url(client, monkeypatch):
     get_settings.cache_clear()
 
     async def fake_fetch(_params):
-        return {"hits": [{"id": 99, "previewURL": "https://evil.example/image.jpg"}]}
+        return {"hits": [{"id": 99, "webformatURL": "https://evil.example/image.jpg"}]}
 
     monkeypatch.setattr(pixabay, "_fetch_json", fake_fetch)
 

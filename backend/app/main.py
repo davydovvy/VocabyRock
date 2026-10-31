@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -20,9 +21,9 @@ from .auth import (
     record_failed_login,
     verify_password,
 )
-from . import audio_jobs, pixabay, wiktapi
+from . import audio_jobs, library_archive, pixabay, wiktapi
+from . import pack_pdf
 from .config import get_settings
-from .csv_io import HEADERS, export_csv, import_csv, preview_csv
 from .db import get_db
 from .learning import create_practice, public_session, reveal_hint, submit_all_pairs, submit_answer
 from .media import remove_picture, save_picture, save_picture_data
@@ -30,6 +31,7 @@ from .models import AppSettings, Pack, PackWord, PracticeSession, Progress, User
 from .schemas import (
     AnswerInput,
     HintInput,
+    LearnedInput,
     MatchAllInput,
     PackInput,
     PixabaySelection,
@@ -99,14 +101,15 @@ def pack_data(pack: Pack, db: Session, user: User | None = None):
                 select(func.count(Progress.id)).where(
                     Progress.user_id == user.id,
                     Progress.word_id.in_(ids),
-                    Progress.direction == db.get(AppSettings, 1).direction,
-                    Progress.status.in_(["review", "mastered"]),
+                    Progress.direction == "ru-en",
+                    Progress.learned.is_(True),
                 )
             )
             or 0
         )
     return {
         "id": pack.id,
+        "guid": pack.guid,
         "name": pack.name,
         "description": pack.description,
         "category": pack.category,
@@ -114,6 +117,7 @@ def pack_data(pack: Pack, db: Session, user: User | None = None):
         "word_ids": ids,
         "word_count": len(ids),
         "learned_count": learned,
+        "learned": bool(ids) and learned * 10 >= len(ids) * 9,
     }
 
 
@@ -318,9 +322,28 @@ async def upload_word_picture(
     return {"picture": path}
 
 
+@app.delete("/api/words/{word_id}/picture")
+def delete_word_picture(word_id: int, db: Session = Depends(get_db), _: User = Depends(parent)):
+    word = require_word(db, word_id)
+    old_picture = word.picture
+    word.picture = None
+    db.commit()
+    remove_picture(old_picture)
+    return {"picture": None}
+
+
 @app.get("/api/pixabay/search")
 async def search_pixabay(q: str = "", _: User = Depends(parent)):
     return await pixabay.search_images(q)
+
+
+@app.get("/api/pixabay/preview")
+async def pixabay_preview(url: str, _: User = Depends(parent)):
+    return Response(
+        content=await pixabay.preview_image(url),
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @app.post("/api/words/{word_id}/pixabay")
@@ -365,6 +388,22 @@ def add_pack(body: PackInput, db: Session = Depends(get_db), _: User = Depends(p
 @app.get("/api/packs/{pack_id}")
 def get_pack(pack_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     return pack_data(require_pack(db, pack_id), db, user)
+
+
+@app.get("/api/packs/{pack_id}/print/{variant}")
+def print_pack(
+    pack_id: int,
+    variant: Literal["reference", "test"],
+    db: Session = Depends(get_db),
+    _: User = Depends(parent),
+):
+    content = pack_pdf.render_pack(require_pack(db, pack_id), variant)
+    filename = f"pack-{pack_id}-{'words' if variant == 'reference' else 'writing-test'}.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.put("/api/packs/{pack_id}")
@@ -430,59 +469,28 @@ async def upload_pack_cover(
     return {"cover": path}
 
 
-@app.get("/api/import/template")
-def csv_template(_: User = Depends(parent)):
-    return PlainTextResponse(
-        "\ufeff" + ",".join(HEADERS) + "\n",
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="vacabyrock-template.csv"'},
-    )
+@app.get("/api/library/archive")
+def export_library_archive(db: Session = Depends(get_db), _: User = Depends(parent)):
+    return library_archive.export_archive(db)
 
 
-async def read_csv(file: UploadFile):
-    data = await file.read(2_000_001)
-    if len(data) > 2_000_000:
-        raise HTTPException(413, "CSV is too large (2 MB maximum)")
-    try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(400, "Save the CSV as UTF-8") from exc
+async def read_library_archive(file: UploadFile) -> bytes:
+    data = await file.read(library_archive.MAX_ARCHIVE_BYTES + 1)
+    if len(data) > library_archive.MAX_ARCHIVE_BYTES:
+        raise HTTPException(413, "Archive is too large (200 MB maximum).")
+    return data
 
 
-@app.post("/api/import/preview")
-async def preview_import(
+@app.post("/api/library/archive/inspect")
+async def inspect_library_archive(file: UploadFile = File(...), _: User = Depends(parent)):
+    return library_archive.inspect_archive(await read_library_archive(file))
+
+
+@app.post("/api/library/archive")
+async def import_library_archive(
     file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(parent)
 ):
-    return preview_csv(await read_csv(file), db)
-
-
-@app.post("/api/import")
-async def import_words(
-    pack_id: int | None = None,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    _: User = Depends(parent),
-):
-    if pack_id is not None:
-        require_pack(db, pack_id)
-    return import_csv(await read_csv(file), db, pack_id)
-
-
-@app.get("/api/export")
-def export_words(
-    pack_id: int | None = None, db: Session = Depends(get_db), _: User = Depends(parent)
-):
-    query = select(Word)
-    if pack_id is not None:
-        require_pack(db, pack_id)
-        query = query.join(PackWord).where(PackWord.pack_id == pack_id).order_by(PackWord.position)
-    else:
-        query = query.order_by(Word.id)
-    return PlainTextResponse(
-        export_csv(db.scalars(query).all()),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="vacabyrock-words.csv"'},
-    )
+    return library_archive.import_archive(await read_library_archive(file), db)
 
 
 @app.get("/api/settings")
@@ -505,7 +513,7 @@ def start_practice(body: SessionStart, db: Session = Depends(get_db), user: User
     if body.pack_id is not None:
         require_pack(db, body.pack_id)
     kind = body.kind or "choice"
-    direction = "en-ru" if kind == "match_all" else body.direction or settings.direction
+    direction = "en-ru" if kind == "match" else body.direction or settings.direction
     practice = create_practice(
         db,
         user,
@@ -590,6 +598,31 @@ def get_progress(
     return db.scalars(select(Progress).where(Progress.user_id == target_id)).all()
 
 
+@app.put("/api/progress/learned")
+def set_learned(body: LearnedInput, db: Session = Depends(get_db), _: User = Depends(parent)):
+    target = db.get(User, body.child_id)
+    if not target or target.role != "child":
+        raise HTTPException(400, "Choose a child")
+    require_word(db, body.word_id)
+    progress = db.scalar(
+        select(Progress).where(
+            Progress.user_id == target.id,
+            Progress.word_id == body.word_id,
+            Progress.direction == "ru-en",
+        )
+    )
+    if progress is None:
+        if not body.learned:
+            return {"learned": False}
+        progress = Progress(user_id=target.id, word_id=body.word_id, direction="ru-en")
+        db.add(progress)
+    progress.learned = body.learned
+    if not body.learned:
+        progress.typed_streak = 0
+    db.commit()
+    return {"learned": progress.learned}
+
+
 @app.get("/api/stats")
 def statistics(
     child_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(current_user)
@@ -607,8 +640,8 @@ def statistics(
         .order_by(PracticeSession.started_at.desc())
         .limit(12)
     ).all()
-    learned = len({p.word_id for p in progress if p.status in ("review", "mastered")})
-    studying = len({p.word_id for p in progress if p.status == "learning"})
+    learned = len({p.word_id for p in progress if p.learned})
+    studying = len({p.word_id for p in progress}) - learned
     difficult = len({p.word_id for p in progress if p.incorrect > p.correct})
     due = len({p.word_id for p in progress if p.next_review_at and p.next_review_at <= now()})
     attempts = sum(p.attempts for p in progress)

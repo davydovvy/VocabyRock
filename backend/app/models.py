@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -33,6 +34,9 @@ class AuthSession(Base):
 class Word(Base):
     __tablename__ = "words"
     id: Mapped[int] = mapped_column(primary_key=True)
+    guid: Mapped[str] = mapped_column(
+        String(36), unique=True, index=True, default=lambda: str(uuid4())
+    )
     english: Mapped[str] = mapped_column(String(160), index=True)
     translations: Mapped[list] = mapped_column(JSON)
     ipa: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -54,6 +58,9 @@ class Word(Base):
 class Pack(Base):
     __tablename__ = "packs"
     id: Mapped[int] = mapped_column(primary_key=True)
+    guid: Mapped[str] = mapped_column(
+        String(36), unique=True, index=True, default=lambda: str(uuid4())
+    )
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -86,6 +93,8 @@ class Progress(Base):
     incorrect: Mapped[int] = mapped_column(Integer, default=0)
     interval_days: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="new")
+    typed_streak: Mapped[int] = mapped_column(Integer, default=0)
+    learned: Mapped[bool] = mapped_column(Boolean, default=False)
     last_practiced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     next_review_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

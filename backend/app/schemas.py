@@ -37,6 +37,7 @@ class WordSaveInput(WordInput):
 class WordOut(WordInput):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    guid: str
     picture: str | None
     audio: str | None
     audio_status: str | None
@@ -66,10 +67,12 @@ class PackInput(BaseModel):
 class PackOut(PackInput):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    guid: str
     cover: str | None
     word_ids: list[int] = []
     word_count: int = 0
     learned_count: int = 0
+    learned: bool = False
 
 
 class UserOut(BaseModel):
@@ -119,7 +122,7 @@ class SettingsInput(BaseModel):
 
 class SessionStart(BaseModel):
     pack_id: int | None = None
-    mode: str = Field(default="quick", pattern="^(quick|new|practice|hard|all|mistakes)$")
+    mode: str = Field(default="quick", pattern="^(quick|new|practice|hard|all|mistakes|test)$")
     kind: str | None = Field(
         default=None, pattern="^(match|match_all|flashcard|choice|type|listen)$"
     )
@@ -137,6 +140,12 @@ class AnswerInput(BaseModel):
 
 class HintInput(BaseModel):
     level: int = Field(ge=1, le=2)
+
+
+class LearnedInput(BaseModel):
+    child_id: int
+    word_id: int
+    learned: bool
 
 
 class MatchPairInput(BaseModel):

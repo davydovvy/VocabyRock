@@ -14,8 +14,10 @@ RUN pip install --no-cache-dir .
 COPY backend/alembic.ini ./
 COPY backend/alembic ./alembic
 COPY --from=web-build /build/dist /app/frontend/dist
+RUN chmod -R a+rX /app/backend /app/frontend/dist
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin vacabyrock
 USER 10001:10001
+RUN alembic history > /dev/null
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=4)" || exit 1
 CMD ["sh", "-c", "mkdir -p /data/images /data/audio /data/backups && alembic upgrade head && python -m app.initialize && exec uvicorn app.main:app --host 0.0.0.0 --port 8787"]

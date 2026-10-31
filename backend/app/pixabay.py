@@ -2,17 +2,19 @@
 
 import asyncio
 import hashlib
+import io
 import json
 import secrets
 import time
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
 from fastapi import HTTPException
+from PIL import Image, UnidentifiedImageError
 
 from .config import get_settings
-from .media import MAX_BYTES
+from .media import ALLOWED, MAX_BYTES
 
 API_URL = "https://pixabay.com/api/"
 CACHE_SECONDS = 24 * 60 * 60
@@ -108,7 +110,7 @@ async def search_images(query: str) -> dict:
     for hit in data["hits"]:
         if not isinstance(hit, dict):
             continue
-        preview = hit.get("previewURL")
+        preview = hit.get("webformatURL")
         page = hit.get("pageURL")
         if (
             type(hit.get("id")) is int
@@ -120,7 +122,7 @@ async def search_images(query: str) -> dict:
             hits.append(
                 {
                     "id": hit["id"],
-                    "preview_url": preview,
+                    "preview_url": f"/api/pixabay/preview?url={quote(preview, safe='')}",
                     "page_url": page,
                     "tags": str(hit.get("tags", "")),
                     "user": str(hit.get("user", "")),
@@ -129,7 +131,61 @@ async def search_images(query: str) -> dict:
     return {"hits": hits}
 
 
+async def preview_image(url: str) -> bytes:
+    if not _pixabay_url(url, IMAGE_HOSTS):
+        raise HTTPException(400, "Invalid Pixabay preview URL.")
+    digest = hashlib.sha256(url.encode()).hexdigest()
+    path = get_settings().data_dir / "pixabay-cache" / "previews" / f"{digest}.webp"
+    try:
+        if time.time() - path.stat().st_mtime < CACHE_SECONDS:
+            return path.read_bytes()
+    except FileNotFoundError:
+        pass
+
+    data = await download_image(url)
+    try:
+        image = Image.open(io.BytesIO(data))
+        image.verify()
+        image = Image.open(io.BytesIO(data))
+        if image.format not in ALLOWED or image.width * image.height > 25_000_000:
+            raise ValueError("Unsupported preview")
+        image.thumbnail((150, 150), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.convert("RGB").save(output, "WEBP", quality=80)
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(502, "Pixabay returned an invalid preview image.") from exc
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.stem}.{secrets.token_hex(4)}.tmp")
+    try:
+        temporary.write_bytes(output.getvalue())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output.getvalue()
+
+
+def _cached_picture_url(image_id: int) -> str | None:
+    folder = get_settings().data_dir / "pixabay-cache"
+    for path in folder.glob("*.json"):
+        try:
+            entry = json.loads(path.read_text())
+            if time.time() - entry["saved_at"] >= CACHE_SECONDS:
+                continue
+            for hit in entry["data"]["hits"]:
+                if isinstance(hit, dict) and hit.get("id") == image_id:
+                    url = hit.get("webformatURL")
+                    if isinstance(url, str) and _pixabay_url(url, IMAGE_HOSTS):
+                        return url
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return None
+
+
 async def download_picture(image_id: int) -> bytes:
+    cached_url = _cached_picture_url(image_id)
+    if cached_url:
+        return await preview_image(cached_url)
     data = await _request({"id": str(image_id), "safesearch": "true"})
     hit = next(
         (item for item in data["hits"] if isinstance(item, dict) and item.get("id") == image_id),
@@ -137,10 +193,10 @@ async def download_picture(image_id: int) -> bytes:
     )
     if hit is None:
         raise HTTPException(404, "Pixabay image not found.")
-    url = hit.get("previewURL")
+    url = hit.get("webformatURL")
     if not isinstance(url, str) or not _pixabay_url(url, IMAGE_HOSTS):
         raise HTTPException(502, "Pixabay returned an invalid image URL.")
-    return await download_image(url)
+    return await preview_image(url)
 
 
 async def download_image(url: str) -> bytes:

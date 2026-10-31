@@ -36,9 +36,17 @@ export function Logo() {
     </div>
   )
 }
-export function Shell({ children, right }: { children: ReactNode; right?: ReactNode }) {
+export function Shell({
+  children,
+  right,
+  className = '',
+}: {
+  children: ReactNode
+  right?: ReactNode
+  className?: string
+}) {
   return (
-    <div className="min-h-screen">
+    <div className={`min-h-screen ${className}`}>
       <header className="mx-auto max-w-7xl px-4 md:px-8 py-5 flex items-center justify-between gap-3">
         <Logo />
         {right}

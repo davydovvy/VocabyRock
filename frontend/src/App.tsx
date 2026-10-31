@@ -76,12 +76,12 @@ export default function App() {
       <Child user={user} config={config} onLogout={() => void logout()} onUserChange={setUser} />
     )
   return (
-    <div className="min-h-screen">
+    <div className="profile-screen min-h-screen">
       <header className="mx-auto max-w-7xl px-4 md:px-8 py-6">
         <Logo />
       </header>
       <main className="mx-auto max-w-6xl px-4 pb-16">
-        <section className="text-center pt-9 md:pt-14">
+        <section className="profile-welcome text-center pt-9 md:pt-14">
           <div className="text-6xl floaty" aria-hidden="true">
             ✨
           </div>
@@ -101,7 +101,10 @@ export default function App() {
             {error}
           </p>
         )}
-        <section aria-label="Choose a profile" className="mt-10 grid gap-5 sm:grid-cols-3">
+        <section
+          aria-label="Choose a profile"
+          className="profile-grid mt-10 grid gap-5 sm:grid-cols-3"
+        >
           {profiles.map((profile, i) => (
             <button
               key={profile.id}
@@ -111,7 +114,7 @@ export default function App() {
                   setParentOpen(true)
                 } else void chooseChild(profile)
               }}
-              className="card group relative min-h-72 p-6 text-center transition-transform hover:-translate-y-2 focus-visible:-translate-y-2"
+              className="profile-card card group relative min-h-72 p-6 text-center transition-transform hover:-translate-y-2 focus-visible:-translate-y-2"
             >
               <div
                 className={`mx-auto flex h-32 w-32 items-center justify-center rounded-full ${i === 0 ? 'bg-[#e8e1ff]' : i === 1 ? 'bg-[#ffe5ca]' : 'bg-[#d8f4e8]'} shadow-inner`}
@@ -129,12 +132,12 @@ export default function App() {
                 )}
               </p>
               <span className="mt-4 inline-flex items-center gap-1 font-black text-violet">
-                {profile.role === 'parent' ? 'Sign in' : 'Play'} <ArrowRight size={19} />
+                {profile.role === 'parent' ? 'Sign in' : 'Study'} <ArrowRight size={19} />
               </span>
             </button>
           ))}
         </section>
-        <p className="mt-10 text-center font-bold text-[#8b90a7]">
+        <p className="profile-footer mt-10 text-center font-bold text-[#8b90a7]">
           Learn a word. Earn a star. Rock on!
         </p>
       </main>

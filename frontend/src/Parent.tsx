@@ -13,6 +13,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Volume2,
   X,
 } from 'lucide-react'
 import {
@@ -59,8 +60,45 @@ const partsOfSpeech = [
   'phrase',
 ] as const
 const blankPack = { name: '', description: '', category: '' }
-type PictureChoice = { kind: 'upload'; file: File } | { kind: 'pixabay'; hit: PixabayHit }
+type PictureChoice =
+  { kind: 'upload'; file: File } | { kind: 'pixabay'; hit: PixabayHit } | { kind: 'remove' }
 const normalizeEnglish = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
+
+function PixabayPreview({
+  hit,
+  className,
+  alt,
+}: {
+  hit: PixabayHit
+  className: string
+  alt: string
+}) {
+  const [failed, setFailed] = useState(false)
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    setFailed(false)
+    setRetry(0)
+  }, [hit.preview_url])
+  return failed ? (
+    <button
+      type="button"
+      className={`${className} flex items-center justify-center bg-[#f0ebff] p-2 text-center text-sm font-bold text-violet`}
+      onClick={() => {
+        setFailed(false)
+        setRetry((attempt) => attempt + 1)
+      }}
+    >
+      Preview unavailable. Tap to retry.
+    </button>
+  ) : (
+    <img
+      className={className}
+      src={`${hit.preview_url}&retry=${retry}`}
+      alt={alt}
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 export default function Parent({ config, onLogout }: { config: Config; onLogout: () => void }) {
   const [tab, setTab] = useState<Tab>('overview')
@@ -90,14 +128,12 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [showPackForm, setShowPackForm] = useState(false)
   const [selectedPack, setSelectedPack] = useState<Pack | null>(null)
   const [chosenWord, setChosenWord] = useState<number | ''>('')
-  const [csvFile, setCsvFile] = useState<File | null>(null)
-  const [csvPack, setCsvPack] = useState<number | ''>('')
-  const [preview, setPreview] = useState<{
-    rows: { line: number; data: WordInput; duplicate_id: number | null }[]
-    errors: string[]
-  } | null>(null)
+  const [archiveFile, setArchiveFile] = useState<File | null>(null)
+  const [archiveInfo, setArchiveInfo] = useState<{ words: number; packs: number } | null>(null)
   const [stats, setStats] = useState<Record<number, Stats>>({})
   const [progressRows, setProgressRows] = useState<Record<number, ProgressRow[]>>({})
+  const [progressLoaded, setProgressLoaded] = useState(false)
+  const [savingProgress, setSavingProgress] = useState(false)
   const [pixabayQuery, setPixabayQuery] = useState('')
   const [pixabayHits, setPixabayHits] = useState<PixabayHit[] | null>(null)
   const [pixabayBusy, setPixabayBusy] = useState(false)
@@ -123,6 +159,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     ])
     setStats(Object.fromEntries(children.map((p, i) => [p.id, next[i]])))
     setProgressRows(Object.fromEntries(children.map((p, i) => [p.id, rows[i]])))
+    setProgressLoaded(true)
   }
   useEffect(() => {
     void refresh().catch((e) => setError(e.message))
@@ -131,7 +168,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       .catch((e) => setError(e.message))
   }, [])
   useEffect(() => {
-    if (tab === 'progress' || tab === 'overview')
+    if (tab === 'progress' || tab === 'overview' || tab === 'words' || tab === 'packs')
       void refreshStats().catch((e) => setError(e.message))
   }, [tab])
   useEffect(() => {
@@ -154,6 +191,62 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     } catch (e) {
       setError((e as Error).message)
     }
+  }
+  const setWordLearned = async (childId: number, wordId: number, learned: boolean) => {
+    setSavingProgress(true)
+    setError('')
+    try {
+      await api('/progress/learned', json('PUT', { child_id: childId, word_id: wordId, learned }))
+      await refreshStats()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSavingProgress(false)
+    }
+  }
+  const learnedChecks = (word: Word) => (
+    <div className="flex flex-wrap gap-x-3 gap-y-1">
+      {profiles
+        .filter((profile) => profile.role === 'child')
+        .map((child) => (
+          <label key={child.id} className="inline-flex items-center gap-1.5 text-sm font-bold">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-violet"
+              aria-label={`${child.name} learned ${word.english}`}
+              checked={(progressRows[child.id] || []).some(
+                (row) => row.word_id === word.id && row.direction === 'ru-en' && row.learned,
+              )}
+              disabled={!progressLoaded || savingProgress}
+              onChange={(event) => void setWordLearned(child.id, word.id, event.target.checked)}
+            />
+            {child.name}
+          </label>
+        ))}
+    </div>
+  )
+  const audioButton = (word: Word) => {
+    const recording = word.audio
+    return recording ? (
+      <button
+        type="button"
+        className="btn-soft !min-h-10 !w-10 !p-0"
+        aria-label={`Listen to ${word.english}`}
+        title={`Listen to ${word.english}`}
+        onClick={() => {
+          setError('')
+          void new Audio(recording).play().catch(() => {
+            setError(`Could not play pronunciation for ${word.english}.`)
+          })
+        }}
+      >
+        <Volume2 size={18} />
+      </button>
+    ) : null
+  }
+  const printPack = (pack: Pack, variant: 'reference' | 'test') => {
+    const filename = `pack-${pack.id}-${variant === 'reference' ? 'words' : 'writing-test'}.pdf`
+    void run(() => download(`/packs/${pack.id}/print/${variant}`, filename), 'PDF downloaded')
   }
   const filteredWords = useMemo(
     () =>
@@ -289,6 +382,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         )
         setEditingWord({ ...savedWord, picture: result.picture })
         setPictureChoice(null)
+      } else if (pictureChoice?.kind === 'remove') {
+        await api<{ picture: null }>(`/words/${savedWord.id}/picture`, json('DELETE'))
+        setEditingWord({ ...savedWord, picture: null })
+        setPictureChoice(null)
       }
       saveStage = 'refresh'
       await refresh()
@@ -366,30 +463,29 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       if (pixabaySearchId.current === searchId) setPixabayBusy(false)
     }
   }
-  const previewFile = async () => {
-    if (!csvFile) return
+  const inspectFile = async () => {
+    if (!archiveFile) return
     const form = new FormData()
-    form.append('file', csvFile)
+    form.append('file', archiveFile)
     setError('')
     try {
-      setPreview(await api('/import/preview', { method: 'POST', body: form }))
+      setArchiveInfo(await api('/library/archive/inspect', { method: 'POST', body: form }))
     } catch (e) {
       setError((e as Error).message)
     }
   }
   const importFile = async () => {
-    if (!csvFile) return
+    if (!archiveFile || !archiveInfo) return
+    if (!window.confirm('Replace all words and packs with this archive?')) return
     const form = new FormData()
-    form.append('file', csvFile)
+    form.append('file', archiveFile)
     await run(async () => {
-      const result = await api<{ imported: number }>(
-        `/import${csvPack ? `?pack_id=${csvPack}` : ''}`,
-        { method: 'POST', body: form },
-      )
-      setPreview(null)
-      setCsvFile(null)
-      setNotice(`${result.imported} new words imported`)
-    }, 'Import complete')
+      await api('/library/archive', { method: 'POST', body: form })
+      setArchiveInfo(null)
+      setArchiveFile(null)
+      setSelectedPack(null)
+      setFilterPack('')
+    }, 'Vocabulary archive imported')
   }
   const saveSettings = async () => {
     if (!settings) return
@@ -586,9 +682,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   {word.audio_status === 'retrying' && (
                     <p className="mt-2 text-xs font-bold text-violet">Audio retry scheduled</p>
                   )}
-                  {word.audio_status === 'ready' && (
-                    <p className="mt-2 text-xs font-bold text-violet">Audio available offline</p>
-                  )}
                   {word.audio_status === 'failed' && (
                     <p className="mt-2 text-xs font-bold text-coral break-words">
                       Audio download failed{word.audio_error ? `: ${word.audio_error}` : ''}
@@ -604,6 +697,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   )}
                 </div>
                 <div className="flex flex-col justify-between gap-2">
+                  {audioButton(word)}
                   <button
                     className="btn-soft !min-h-10 !w-10 !p-0"
                     aria-label={`Edit ${word.english}`}
@@ -620,6 +714,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   >
                     <Trash2 size={17} />
                   </button>
+                </div>
+                <div className="col-span-2 border-t border-[#ebe6f6] pt-2">
+                  {learnedChecks(word)}
                 </div>
               </article>
             ))}
@@ -660,6 +757,12 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     </button>
                     <button className="btn-soft" onClick={() => openPack(pack)}>
                       Edit
+                    </button>
+                    <button className="btn-soft" onClick={() => printPack(pack, 'reference')}>
+                      <Download size={18} /> Word sheet
+                    </button>
+                    <button className="btn-soft" onClick={() => printPack(pack, 'test')}>
+                      <Download size={18} /> Writing test
                     </button>
                     <label className="btn-soft" aria-label={`Upload cover for ${pack.name}`}>
                       <ImagePlus size={19} />
@@ -764,7 +867,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                           {word.translations.join(', ')}
                         </p>
                       </div>
+                      {learnedChecks(word)}
                       <div className="ml-auto flex shrink-0 gap-1 sm:gap-2">
+                        {audioButton(word)}
                         <button
                           className="btn-soft !min-h-10 !w-10 !p-0"
                           aria-label={`Edit ${word.english}`}
@@ -820,101 +925,53 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       {tab === 'import' && (
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="card p-6">
-            <h2 className="text-2xl font-black">Import CSV</h2>
+            <h2 className="text-2xl font-black">Export vocabulary archive</h2>
             <p className="mt-2 font-bold text-[#747995]">
-              Use UTF-8. Separate translations with a semicolon.
+              Download all words, packs, pictures, covers, and saved pronunciations as one ZIP file.
             </p>
             <button
-              className="btn-soft mt-4"
-              onClick={() => void download('/import/template', 'vacabyrock-template.csv')}
+              className="btn-primary mt-5"
+              onClick={() => void download('/library/archive', 'vacabyrock-vocabulary.zip')}
             >
-              <Download /> Get template
+              <Download /> Download archive
             </button>
-            <label className="label mt-7">CSV file</label>
+          </div>
+          <div className="card p-6">
+            <h2 className="text-2xl font-black">Import vocabulary archive</h2>
+            <p className="mt-2 font-bold text-[#747995]">
+              Replace this device’s words and packs with an archive. Matching words keep the
+              children’s learning progress. Words missing from the archive are removed.
+            </p>
+            <label className="label mt-5" htmlFor="library-archive">
+              ZIP archive
+            </label>
             <input
+              id="library-archive"
               type="file"
-              accept=".csv,text/csv"
+              accept=".zip,application/zip"
               className="field"
               onChange={(e) => {
-                setCsvFile(e.target.files?.[0] || null)
-                setPreview(null)
+                setArchiveFile(e.target.files?.[0] || null)
+                setArchiveInfo(null)
               }}
             />
-            <label className="label mt-4">Add imported words to a pack</label>
-            <select
-              className="field"
-              value={csvPack}
-              onChange={(e) => setCsvPack(e.target.value ? Number(e.target.value) : '')}
-            >
-              <option value="">Library only</option>
-              {packs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
             <button
-              disabled={!csvFile}
+              disabled={!archiveFile}
               className="btn-primary mt-5"
-              onClick={() => void previewFile()}
+              onClick={() => void inspectFile()}
             >
-              Preview Import
+              Check archive
             </button>
-            {preview && (
+            {archiveInfo && (
               <div className="mt-6">
-                <h3 className="font-black text-lg">Preview: {preview.rows.length} rows</h3>
-                {preview.errors.map((error, i) => (
-                  <p className="text-coral font-bold" key={i}>
-                    {error}
-                  </p>
-                ))}
-                <div className="max-h-56 overflow-auto mt-2">
-                  {preview.rows.map((row) => (
-                    <p className="border-b py-2" key={row.line}>
-                      {row.data.english} — {row.data.translations.join(', ')}{' '}
-                      {row.duplicate_id && (
-                        <span className="text-[#ad7b20] font-black">Already in library</span>
-                      )}
-                    </p>
-                  ))}
-                </div>
-                <button
-                  disabled={preview.errors.length > 0 || preview.rows.length === 0}
-                  className="btn-mint mt-5"
-                  onClick={() => void importFile()}
-                >
-                  Import Words
+                <p className="font-black">
+                  Archive contains {archiveInfo.words} words and {archiveInfo.packs} packs.
+                </p>
+                <button className="btn-coral mt-5" onClick={() => void importFile()}>
+                  Replace library
                 </button>
               </div>
             )}
-          </div>
-          <div className="card p-6">
-            <h2 className="text-2xl font-black">Export CSV</h2>
-            <p className="mt-2 font-bold text-[#747995]">Save a copy of your vocabulary.</p>
-            <button
-              className="btn-primary mt-5"
-              onClick={() => void download('/export', 'vacabyrock-library.csv')}
-            >
-              <Download /> Full Library
-            </button>
-            <h3 className="mt-8 font-black">One pack</h3>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {packs.map((pack) => (
-                <button
-                  className="btn-soft"
-                  key={pack.id}
-                  onClick={() =>
-                    void download(
-                      `/export?pack_id=${pack.id}`,
-                      `vacabyrock-${pack.name.toLowerCase().replaceAll(' ', '-')}.csv`,
-                    )
-                  }
-                >
-                  <Download size={18} />
-                  {pack.name}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       )}
@@ -924,6 +981,15 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             .filter((p) => p.role === 'child')
             .map((child) => {
               const data = stats[child.id]
+              const rows = progressRows[child.id] || []
+              const learnedWordIds = new Set(
+                rows.filter((row) => row.learned).map((row) => row.word_id),
+              )
+              const studyingRows = rows.filter(
+                (row, index) =>
+                  !learnedWordIds.has(row.word_id) &&
+                  rows.findIndex((candidate) => candidate.word_id === row.word_id) === index,
+              )
               return (
                 <section className="card p-6" key={child.id}>
                   <div className="flex items-center gap-4 mb-6">
@@ -947,16 +1013,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   <div className="mt-5 grid gap-3 md:grid-cols-3">
                     <WordStatusList
                       title="Learned words"
-                      rows={(progressRows[child.id] || []).filter(
-                        (r) => r.status === 'review' || r.status === 'mastered',
-                      )}
+                      rows={rows.filter((row) => row.learned)}
                       words={words}
                     />
-                    <WordStatusList
-                      title="Studying words"
-                      rows={(progressRows[child.id] || []).filter((r) => r.status === 'learning')}
-                      words={words}
-                    />
+                    <WordStatusList title="Studying words" rows={studyingRows} words={words} />
                     <WordStatusList
                       title="Hard words"
                       rows={(progressRows[child.id] || []).filter((r) => r.incorrect > r.correct)}
@@ -1121,7 +1181,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                         })
                       }
                     />
-                    {kind}
+                    {kind === 'match' ? 'Big Match' : kind}
                   </label>
                 ))}
             </div>
@@ -1295,14 +1355,16 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
           <section className="mt-6 rounded-2xl border-2 border-[#e5ddf5] p-4">
             <h3 className="font-black text-lg">Picture</h3>
             <div className="mt-3 flex flex-wrap items-center gap-4">
-              {pictureChoice?.kind === 'pixabay' || (!pictureChoice && editingWord?.picture) ? (
+              {pictureChoice?.kind === 'pixabay' ? (
+                <PixabayPreview
+                  hit={pictureChoice.hit}
+                  className="h-24 w-24 rounded-2xl object-cover"
+                  alt="Word picture"
+                />
+              ) : !pictureChoice && editingWord?.picture ? (
                 <img
                   className="h-24 w-24 rounded-2xl object-cover"
-                  src={
-                    pictureChoice?.kind === 'pixabay'
-                      ? pictureChoice.hit.preview_url
-                      : editingWord?.picture || ''
-                  }
+                  src={editingWord.picture}
                   alt="Word picture"
                 />
               ) : (
@@ -1345,8 +1407,20 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     {editingWord?.picture ? 'Keep current picture' : 'Clear picture'}
                   </button>
                 )}
+                {editingWord?.picture && pictureChoice?.kind !== 'remove' && (
+                  <button
+                    type="button"
+                    className="btn-soft text-coral"
+                    onClick={() => setPictureChoice({ kind: 'remove' })}
+                  >
+                    <Trash2 size={19} /> Remove picture
+                  </button>
+                )}
               </div>
             </div>
+            {pictureChoice?.kind === 'remove' && (
+              <p className="mt-2 font-bold">Picture will be removed when you save this word.</p>
+            )}
             {pictureChoice?.kind === 'upload' && (
               <p className="mt-2 font-bold">Selected: {pictureChoice.file.name}</p>
             )}
@@ -1401,11 +1475,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   <div className="mt-5 grid max-h-72 grid-cols-2 gap-4 overflow-y-auto sm:grid-cols-3">
                     {pixabayHits.map((hit) => (
                       <article key={hit.id} className="rounded-2xl border-2 border-[#e5ddf5] p-2">
-                        <img
+                        <PixabayPreview
+                          hit={hit}
                           className="h-28 w-full rounded-xl object-cover"
-                          src={hit.preview_url}
                           alt={hit.tags || 'Pixabay picture'}
-                          loading="lazy"
                         />
                         <button
                           type="button"

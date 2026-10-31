@@ -7,11 +7,11 @@ test('child plays, parent adds a word, child finds it', async ({ page }) => {
 
   await page.goto('/')
   await page.getByRole('button', { name: /Explorer One/ }).click()
-  await expect(page.getByText('Ready to play?')).toBeVisible()
+  await expect(page.getByText('Ready to study?')).toBeVisible()
   await page
     .getByRole('article')
     .filter({ hasText: 'Animals' })
-    .getByRole('button', { name: 'Play' })
+    .getByRole('button', { name: 'Study' })
     .click()
   await page.getByRole('button', { name: 'Flip Cards' }).click()
   for (let i = 0; i < 10; i++) {

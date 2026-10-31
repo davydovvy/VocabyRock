@@ -5,7 +5,6 @@ import {
   BookOpen,
   Check,
   CircleHelp,
-  Grid2X2,
   Headphones,
   Heart,
   Home,
@@ -32,11 +31,11 @@ import {
   type Word,
 } from './api'
 import { animal, Empty, packArt, ProgressBar, Shell, Speak, Star } from './ui'
+import BigMatch from './BigMatch'
 
 const games: { kind: Kind; title: string; icon: typeof Layers3; color: string }[] = [
   { kind: 'choice', title: 'Pick the Word', icon: CircleHelp, color: 'bg-[#d8eaff]' },
-  { kind: 'match', title: 'Find Pairs', icon: Shuffle, color: 'bg-[#ffe3e7]' },
-  { kind: 'match_all', title: 'Find Pairs Challenge', icon: Grid2X2, color: 'bg-[#ffd9e0]' },
+  { kind: 'match', title: 'Big Match', icon: Shuffle, color: 'bg-[#ffe3e7]' },
   { kind: 'flashcard', title: 'Flip Cards', icon: Layers3, color: 'bg-[#e6ddff]' },
   { kind: 'type', title: 'Type It', icon: Keyboard, color: 'bg-[#e1f7e7]' },
   { kind: 'listen', title: 'Listen', icon: Headphones, color: 'bg-[#fff0ca]' },
@@ -118,7 +117,7 @@ export default function Child({
           pack_id: chosenPack?.id ?? null,
           mode: chosenMode,
           kind,
-          direction,
+          direction: chosenMode === 'test' ? 'ru-en' : direction,
           word_ids: wordIds,
         }),
       )
@@ -167,6 +166,7 @@ export default function Child({
 
   return (
     <Shell
+      className="child-shell"
       right={
         <div className="flex items-center gap-2 md:gap-4">
           <span className="hidden sm:inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 font-black">
@@ -190,8 +190,8 @@ export default function Child({
         </div>
       )}
       {view === 'home' && (
-        <>
-          <section className="relative overflow-hidden rounded-[2.5rem] bg-gradient-to-br from-[#7460dd] via-[#6d62da] to-[#53b8d8] p-6 md:p-10 text-white shadow-card min-h-[290px] flex items-center">
+        <div className="child-home">
+          <section className="home-hero relative overflow-hidden rounded-[2.5rem] bg-gradient-to-br from-[#7460dd] via-[#6d62da] to-[#53b8d8] p-6 md:p-10 text-white shadow-card min-h-[290px] flex items-center">
             <div className="absolute right-4 top-1 text-[7rem] opacity-15" aria-hidden="true">
               ✦
             </div>
@@ -201,7 +201,7 @@ export default function Child({
               </span>
               <h1 className="mt-4 text-4xl md:text-5xl font-black leading-tight">
                 Hi, {user.name}!<br />
-                Ready to play?
+                Ready to study?
               </h1>
               <p className="mt-2 text-lg font-bold text-white/90">
                 {stats?.due
@@ -211,9 +211,9 @@ export default function Child({
               <button
                 disabled={busy}
                 className="btn-coral mt-6 text-xl px-9"
-                onClick={() => void start('choice', 'quick', null)}
+                onClick={() => openPack(null)}
               >
-                ▶ Play
+                Study <ArrowRight size={20} />
               </button>
             </div>
             <div
@@ -223,7 +223,7 @@ export default function Child({
               {animal[user.avatar] || '🦊'}
             </div>
           </section>
-          <div className="mt-8 grid gap-4 sm:grid-cols-3">
+          <div className="home-stats mt-8 grid gap-4 sm:grid-cols-3">
             <div className="card p-5 flex items-center gap-4">
               <div className="rounded-2xl bg-[#fff0ca] p-3">
                 <Star />
@@ -256,17 +256,7 @@ export default function Child({
               <ArrowRight className="ml-auto text-violet" />
             </button>
           </div>
-          {stats && stats.achievements.length > 0 && (
-            <div className="mt-6 flex flex-wrap items-center gap-2">
-              <span className="font-black">My badges:</span>
-              {stats.achievements.map((badge) => (
-                <span key={badge} className="rounded-full bg-[#fff0ca] px-4 py-2 font-black">
-                  🏅 {badge}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="mt-12 flex items-end justify-between gap-4">
+          <div className="home-packs-heading mt-12 flex items-end justify-between gap-4">
             <div>
               <p className="text-violet font-black uppercase tracking-widest text-sm">
                 Pick an adventure
@@ -280,13 +270,13 @@ export default function Child({
               All words →
             </button>
           </div>
-          <div className="mt-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+          <div className="home-pack-grid mt-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {packs.map((item) => {
               const art = packArt[item.name] || { emoji: '🎒', bg: 'bg-[#e8e1ff]' }
               return (
-                <article className="card p-5" key={item.id}>
+                <article className="home-pack-card card p-5" key={item.id}>
                   <div
-                    className={`${art.bg} h-40 rounded-[1.5rem] flex items-center justify-center overflow-hidden`}
+                    className={`home-pack-art ${art.bg} h-40 rounded-[1.5rem] flex items-center justify-center overflow-hidden`}
                   >
                     {item.cover ? (
                       <img className="w-full h-full object-cover" src={item.cover} alt="" />
@@ -307,7 +297,7 @@ export default function Child({
                   </div>
                   <div className="mt-4">
                     <div className="mb-2 flex justify-between text-sm font-black text-[#6b7190]">
-                      <span>My progress</span>
+                      <span>{item.learned ? 'Pack learned!' : 'My progress'}</span>
                       <span>
                         {item.learned_count}/{item.word_count}
                       </span>
@@ -316,17 +306,39 @@ export default function Child({
                       value={item.word_count ? (item.learned_count / item.word_count) * 100 : 0}
                     />
                   </div>
-                  <button className="btn-primary mt-5 w-full" onClick={() => openPack(item)}>
-                    Play <ArrowRight size={20} />
-                  </button>
+                  <div className="mt-5 flex gap-2">
+                    <button className="btn-primary flex-1" onClick={() => openPack(item)}>
+                      Study <ArrowRight size={20} />
+                    </button>
+                    <button
+                      className="btn-soft flex-1"
+                      disabled={busy || item.learned_count === item.word_count}
+                      onClick={() => {
+                        setPack(item)
+                        void start('type', 'test', item)
+                      }}
+                    >
+                      Test
+                    </button>
+                  </div>
                 </article>
               )
             })}
           </div>
-        </>
+          {stats && stats.achievements.length > 0 && (
+            <div className="mt-6 flex flex-wrap items-center gap-2">
+              <span className="font-black">My badges:</span>
+              {stats.achievements.map((badge) => (
+                <span key={badge} className="rounded-full bg-[#fff0ca] px-4 py-2 font-black">
+                  🏅 {badge}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       {view === 'choose' && (
-        <>
+        <div className="child-choose">
           <button className="btn-soft mb-6" onClick={goHome}>
             <ArrowLeft /> Back
           </button>
@@ -341,7 +353,7 @@ export default function Child({
                 </p>
                 <h1 className="section-title">{pack?.name || 'All Words'}</h1>
                 <p className="text-[#6b7190] font-bold">
-                  {pack?.word_count ?? 'Lots of'} words to play
+                  {pack?.word_count ?? 'Lots of'} words to study
                 </p>
               </div>
             </div>
@@ -363,13 +375,9 @@ export default function Child({
               ))}
             </div>
             <h2 className="mt-9 text-xl font-black">Pick a game</h2>
-            <div className="mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div className="choose-games mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               {games
-                .filter((game) =>
-                  config.allowed_exercises.includes(
-                    game.kind === 'match_all' ? 'match' : game.kind,
-                  ),
-                )
+                .filter((game) => config.allowed_exercises.includes(game.kind))
                 .map((game) => (
                   <button
                     disabled={busy}
@@ -405,30 +413,46 @@ export default function Child({
               </button>
             </div>
           </div>
-        </>
+        </div>
       )}
-      {view === 'game' && practice && (
-        <Game
-          key={practice.id}
-          practice={practice}
-          config={config}
-          onHome={goHome}
-          onAgain={(mistakes) => {
-            if (mistakes?.length)
-              void start(
-                practice.kind === 'match_all' ? 'choice' : practice.kind,
-                'mistakes',
-                pack,
-                mistakes,
-              )
-            else
-              void start(practice.kind, practice.kind === 'match_all' ? 'all' : practice.mode, pack)
-          }}
-          onUpdate={setPractice}
-          onFinish={() => void refresh().catch(() => {})}
-          onSuccess={playSuccess}
-        />
-      )}
+      {view === 'game' &&
+        practice &&
+        (practice.kind === 'match' && practice.tasks[0]?.big_match && !practice.finished ? (
+          <BigMatch
+            practice={practice}
+            onHome={goHome}
+            onUpdate={setPractice}
+            onFinish={() => void refresh().catch(() => {})}
+            onSuccess={playSuccess}
+          />
+        ) : (
+          <Game
+            key={practice.id}
+            practice={practice}
+            config={config}
+            onHome={goHome}
+            onAgain={(mistakes) => {
+              if (mistakes?.length)
+                void start(
+                  practice.kind === 'match' || practice.kind === 'match_all'
+                    ? 'choice'
+                    : practice.kind,
+                  'mistakes',
+                  pack,
+                  mistakes,
+                )
+              else
+                void start(
+                  practice.kind === 'match_all' ? 'match' : practice.kind,
+                  practice.mode,
+                  pack,
+                )
+            }}
+            onUpdate={setPractice}
+            onFinish={() => void refresh().catch(() => {})}
+            onSuccess={playSuccess}
+          />
+        ))}
       {view === 'words' && (
         <>
           <button className="btn-soft mb-6" onClick={goHome}>
@@ -547,7 +571,10 @@ function Game({
     () => practice.results.filter((r) => !r.correct).map((r) => r.word_id),
     [practice.results],
   )
-  const title = games.find((g) => g.kind === practice.kind)?.title || 'Play'
+  const title =
+    practice.mode === 'test'
+      ? 'Pack Test'
+      : games.find((g) => g.kind === practice.kind)?.title || 'Play'
   const pairCount = Object.keys(pairings).length
   const submit = async (
     indexToSend: number,
@@ -671,13 +698,16 @@ function Game({
 
   if (done && (practice.kind === 'match' || practice.kind === 'match_all' || !feedback))
     return (
-      <div className="mx-auto max-w-2xl text-center pt-6">
+      <div className="game-result mx-auto max-w-2xl text-center pt-6">
         <div className="text-8xl pop" aria-hidden="true">
           🏆
         </div>
-        <h1 className="mt-5 text-4xl md:text-5xl font-black">Great job!</h1>
+        <h1 className="mt-5 text-4xl md:text-5xl font-black">
+          {practice.kind === 'match' && practice.tasks[0]?.big_match ? 'You Rock!' : 'Great job!'}
+        </h1>
         <p className="mt-2 text-xl font-bold text-[#6b7190]">
-          You got {correctCount} of {practice.tasks.length} right!
+          {practice.kind === 'match' && practice.tasks[0]?.big_match ? 'First check: ' : 'You got '}
+          {correctCount} of {practice.tasks.length} right!
         </p>
         <div className="card mt-7 p-7">
           <ProgressBar value={(correctCount / practice.tasks.length) * 100} />
@@ -733,10 +763,12 @@ function Game({
           )}
         </div>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <button className="btn-primary text-lg" onClick={() => onAgain()}>
-            <RotateCcw /> Play Again
-          </button>
-          {mistakes.length > 0 && (
+          {practice.mode !== 'test' && (
+            <button className="btn-primary text-lg" onClick={() => onAgain()}>
+              <RotateCcw /> Play Again
+            </button>
+          )}
+          {practice.mode !== 'test' && mistakes.length > 0 && (
             <button className="btn-coral text-lg" onClick={() => onAgain(mistakes)}>
               <Heart /> Practice Mistakes
             </button>
@@ -757,8 +789,8 @@ function Game({
       practice.tasks.length) *
     100
   return (
-    <div className="mx-auto max-w-3xl">
-      <div className="flex items-center justify-between gap-3 mb-6">
+    <div className="game-screen mx-auto max-w-3xl">
+      <div className="game-toolbar flex items-center justify-between gap-3 mb-6">
         <button className="btn-soft" onClick={onHome}>
           <ArrowLeft /> Back
         </button>
@@ -776,7 +808,7 @@ function Game({
         </p>
       )}
       {practice.kind === 'match_all' ? (
-        <div className="card mt-8 p-4 sm:p-6 md:p-8">
+        <div className="challenge-card card mt-8 p-4 sm:p-6 md:p-8">
           <h1 className="text-center section-title">Match all 10 pairs</h1>
           <p className="mt-2 text-center font-bold text-[#6b7190]">
             Tap an English word, then its Russian translation. Change any pair before checking.
@@ -858,7 +890,7 @@ function Game({
           </div>
         </div>
       ) : practice.kind === 'match' ? (
-        <div className="card mt-8 p-5 md:p-8">
+        <div className="match-card card mt-8 p-5 md:p-8">
           <h1 className="text-center section-title">Find the pairs!</h1>
           <div className="mt-7 grid grid-cols-2 gap-4">
             <div className="space-y-3">
@@ -912,7 +944,7 @@ function Game({
           </p>
         </div>
       ) : (
-        <div className="card mt-8 p-6 md:p-10 text-center min-h-[440px]">
+        <div className="game-card card mt-8 p-6 md:p-10 text-center min-h-[440px]">
           <p className="font-black text-violet uppercase tracking-widest">
             {practice.kind === 'flashcard'
               ? 'Flip the card!'
@@ -938,10 +970,10 @@ function Game({
             </div>
           ) : (
             <>
-              <div className="mt-7 text-4xl md:text-5xl font-black">{task.prompt}</div>
+              <div className="game-prompt mt-7 text-4xl md:text-5xl font-black">{task.prompt}</div>
               {task.picture && (
                 <img
-                  className="mx-auto mt-5 h-32 w-40 rounded-2xl object-cover"
+                  className="game-picture mx-auto mt-5 h-32 w-40 rounded-2xl object-cover"
                   src={task.picture}
                   alt="Word picture"
                 />
@@ -1031,7 +1063,7 @@ function Game({
           {!feedback &&
             (practice.kind === 'type' || (practice.kind === 'listen' && !task.options)) && (
               <>
-                {practice.kind === 'type' && (
+                {practice.kind === 'type' && practice.mode !== 'test' && (
                   <div className="mt-7">
                     <div className="flex flex-wrap justify-center gap-3">
                       {hintLevel < 1 && (
@@ -1078,7 +1110,10 @@ function Game({
                   }}
                 >
                   <input
-                    autoFocus
+                    autoFocus={
+                      typeof window.matchMedia !== 'function' ||
+                      !window.matchMedia('(pointer: coarse)').matches
+                    }
                     className="field text-xl flex-1"
                     value={typed}
                     onChange={(e) => setTyped(e.target.value)}
