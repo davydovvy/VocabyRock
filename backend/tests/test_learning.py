@@ -4,18 +4,30 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.learning import (
     check_text,
     create_practice,
+    display_english,
     normalize,
     public_session,
+    reveal_hint,
     submit_answer,
     update_progress,
 )
-from app.models import AppSettings, Pack, PracticeSession, Progress, User, Word, now
+from app.models import AppSettings, Pack, PackWord, PracticeSession, Progress, User, Word, now
 from app.seed import seed
 
 from .conftest import run
+
+
+def record_audio(word: Word) -> None:
+    audio_dir = get_settings().data_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"word-{word.id}.mp3"
+    (audio_dir / filename).write_bytes(b"ID3test")
+    word.audio = f"/audio/{filename}"
+    word.audio_status = "ready"
 
 
 def test_answer_checking_and_multiple_translations(database):
@@ -30,6 +42,103 @@ def test_answer_checking_and_multiple_translations(database):
         assert normalize("  Red   Apple! ") == "red apple"
         settings.lenient_typos = True
         assert check_text("aple", ["apple"], settings)
+
+
+@pytest.mark.parametrize(
+    ("english", "ipa", "expected"),
+    [
+        ("cat", "/kæt/", "a cat"),
+        ("dog", "/dɔɡ/", "a dog"),
+        ("book", "/bʊk/", "a book"),
+        ("house", "/haʊs/", "a house"),
+        ("university", "/ˌjuːnɪˈvɜːrsɪti/", "a university"),
+        ("European country", "/ˌjʊərəˈpiːən ˈkʌntri/", "a European country"),
+        ("apple", "/ˈæpəl/", "an apple"),
+        ("elephant", "/ˈɛlɪfənt/", "an elephant"),
+        ("orange", "/ˈɔːrɪndʒ/", "an orange"),
+        ("umbrella", "/ʌmˈbrɛlə/", "an umbrella"),
+        ("hour", "/ˈaʊər/", "an hour"),
+        ("honest person", "/ˈɒnɪst ˈpɜːrsən/", "an honest person"),
+        ("apple", "/kæpəl/", "a apple"),
+        ("apple", None, "apple"),
+        ("apple", "///", "apple"),
+    ],
+)
+def test_article_uses_ipa_sound_only(english, ipa, expected):
+    word = Word(english=english, ipa=ipa, part_of_speech="singular countable")
+    assert display_english(word) == expected
+
+
+def test_part_of_speech_prefixes_in_questions_options_and_typed_answers(database):
+    with database() as db:
+        child = db.scalar(select(User).where(User.role == "child"))
+        pack = db.scalar(select(Pack).where(Pack.name == "Animals"))
+        words = [
+            Word(
+                english="table",
+                translations=["стол"],
+                ipa="/ˈteɪbəl/",
+                part_of_speech="singular countable",
+            ),
+            Word(english="scissors", translations=["ножницы"], part_of_speech="plural countable"),
+            Word(english="water", translations=["вода"], part_of_speech="uncountable"),
+            Word(english="swim", translations=["плавать"], part_of_speech="verb"),
+            Word(
+                english="apple",
+                translations=["яблоко"],
+                ipa="/ˈæpəl/",
+                part_of_speech="singular countable",
+            ),
+        ]
+        db.add_all(words)
+        db.flush()
+        for index, word in enumerate(words):
+            db.add(PackWord(pack_id=pack.id, word_id=word.id, position=10 + index))
+            record_audio(word)
+        ids = [word.id for word in words]
+        assert [display_english(word) for word in words] == [
+            "a table",
+            "scissors",
+            "water",
+            "to swim",
+            "an apple",
+        ]
+
+        for kind in ("choice", "flashcard", "type", "listen"):
+            en_ru = create_practice(db, child, pack.id, "all", kind, "en-ru", 5, ids)
+            assert {task["prompt"] for task in en_ru.tasks if task["prompt"]} == (
+                set()
+                if kind == "listen"
+                else {"a table", "scissors", "water", "to swim", "an apple"}
+            )
+            ru_en = create_practice(db, child, pack.id, "all", kind, "ru-en", 5, ids)
+            tasks = {task["word_id"]: task for task in ru_en.tasks}
+            assert tasks[words[0].id]["accepted"] == ["a table"]
+            assert tasks[words[0].id]["answer_prefix"] == "a "
+            assert tasks[words[3].id]["accepted"] == ["to swim"]
+            assert tasks[words[3].id]["answer_prefix"] == "to "
+            assert tasks[words[4].id]["accepted"] == ["an apple"]
+            assert tasks[words[4].id]["answer_prefix"] == "an "
+            assert tasks[words[1].id]["answer_prefix"] == ""
+            if kind == "choice":
+                for word in (words[0], words[3], words[4]):
+                    assert display_english(word) in {
+                        option["text"] for option in tasks[word.id]["options"]
+                    }
+            if kind == "type":
+                index = next(
+                    i for i, task in enumerate(ru_en.tasks) if task["word_id"] == words[0].id
+                )
+                assert reveal_hint(db, ru_en, index, 1)["hint"] == "t---e"
+                assert submit_answer(db, ru_en, index, "a table", None, None)["correct"]
+                verb_index = next(
+                    i for i, task in enumerate(ru_en.tasks) if task["word_id"] == words[3].id
+                )
+                assert not submit_answer(db, ru_en, verb_index, "swim", None, None)["correct"]
+
+        test = create_practice(db, child, pack.id, "test", "choice", "en-ru", 1)
+        table_index = next(i for i, task in enumerate(test.tasks) if task["word_id"] == words[0].id)
+        assert submit_answer(db, test, table_index, "a table", None, None)["correct"]
 
 
 def test_spaced_repetition_and_separate_children(database):
@@ -64,6 +173,7 @@ def test_all_exercise_generation_and_unambiguous_options(database):
         db.add(Word(english="bank", translations=["берег"]))
         db.add(Word(english="shore", translations=["берег"]))
         db.flush()
+        record_audio(db.scalar(select(Word)))
         for kind in ("match", "flashcard", "choice", "type", "listen"):
             for direction in ("en-ru", "ru-en"):
                 practice = create_practice(db, child, None, "all", kind, direction, 10)
@@ -89,10 +199,81 @@ def test_all_exercise_generation_and_unambiguous_options(database):
                     )
 
 
+def test_study_games_use_every_unlearned_pack_word_for_each_child(database):
+    with database() as db:
+        children = db.scalars(select(User).where(User.role == "child").order_by(User.id)).all()
+        pack = db.scalar(select(Pack).where(Pack.name == "Animals"))
+        recorded_ids = set()
+        for index in range(3):
+            word = Word(english=f"extra {index}", translations=[f"дополнение {index}"])
+            db.add(word)
+            db.flush()
+            db.add(PackWord(pack_id=pack.id, word_id=word.id, position=10 + index))
+            record_audio(word)
+            recorded_ids.add(word.id)
+        learned_id = pack.words[0].word_id
+        db.add(
+            Progress(user_id=children[0].id, word_id=learned_id, direction="ru-en", learned=True)
+        )
+        db.flush()
+        expected = {
+            row.word_id for row in db.scalars(select(PackWord).where(PackWord.pack_id == pack.id))
+        }
+        for child, word_ids in ((children[0], expected - {learned_id}), (children[1], expected)):
+            for kind in ("choice", "flashcard", "type", "listen"):
+                for direction in ("en-ru", "ru-en"):
+                    session = create_practice(db, child, pack.id, "all", kind, direction, 1)
+                    assert {task["word_id"] for task in session.tasks} == (
+                        word_ids & recorded_ids if kind == "listen" else word_ids
+                    )
+            match = create_practice(db, child, pack.id, "all", "match", "en-ru", 1)
+            assert len(match.tasks) == 8
+            assert {task["word_id"] for task in match.tasks} <= word_ids
+
+
+def test_listen_uses_only_words_with_downloaded_audio(database):
+    with database() as db:
+        child = db.scalar(select(User).where(User.role == "child"))
+        pack = db.scalar(select(Pack).where(Pack.name == "Animals"))
+        recorded = pack.words[0].word
+        missing = pack.words[1].word
+        pending = pack.words[2].word
+        record_audio(recorded)
+        missing.audio = "/audio/missing.mp3"
+        missing.audio_status = "ready"
+        pending.audio_status = "pending"
+        db.flush()
+
+        for direction in ("en-ru", "ru-en"):
+            session = create_practice(db, child, pack.id, "all", "listen", direction, 1)
+            assert [task["word_id"] for task in session.tasks] == [recorded.id]
+            assert session.tasks[0]["audio"] == recorded.audio
+            explicit = create_practice(
+                db, child, pack.id, "all", "listen", direction, 1, [missing.id, recorded.id]
+            )
+            assert [task["word_id"] for task in explicit.tasks] == [recorded.id]
+
+        with pytest.raises(HTTPException, match="downloaded audio"):
+            create_practice(db, child, pack.id, "all", "listen", "en-ru", 1, [missing.id])
+        with pytest.raises(HTTPException, match="downloaded audio"):
+            create_practice(db, child, pack.id, "all", "listen", "en-ru", 1, [pending.id])
+
+
+def test_flipping_card_without_rating_does_not_mark_word_learned(database):
+    with database() as db:
+        child = db.scalar(select(User).where(User.role == "child"))
+        word = db.scalar(select(Word))
+        session = create_practice(db, child, None, "all", "flashcard", "en-ru", 1, [word.id])
+        result = submit_answer(db, session, 0, None, None, None)
+        assert result["finished"]
+        assert db.scalar(select(Progress).where(Progress.user_id == child.id)) is None
+
+
 def test_practice_saves_progress_and_rewards(database):
     with database() as db:
         child = db.scalar(select(User).where(User.role == "child"))
-        practice = create_practice(db, child, None, "all", "choice", "en-ru", 3)
+        word_ids = list(db.scalars(select(Word.id).limit(3)))
+        practice = create_practice(db, child, None, "all", "choice", "en-ru", 3, word_ids)
         for index, task in enumerate(practice.tasks):
             right = next(x for x in task["options"] if x["word_id"] == task["word_id"])
             result = submit_answer(db, practice, index, None, right["token"], None)
@@ -278,7 +459,13 @@ def test_api_child_flow_and_progress(client):
         session = (
             await client.post(
                 "/api/practice",
-                json={"pack_id": pack["id"], "kind": "type", "direction": "en-ru", "length": 1},
+                json={
+                    "pack_id": pack["id"],
+                    "kind": "type",
+                    "direction": "en-ru",
+                    "length": 1,
+                    "word_ids": [pack["word_ids"][0]],
+                },
             )
         ).json()
         answer = (
@@ -289,6 +476,36 @@ def test_api_child_flow_and_progress(client):
         assert answer["finished"] and not answer["correct"]
         assert (await client.get("/api/stats")).json()["studying"] == 1
         assert (await client.get("/api/progress")).json()[0]["incorrect"] == 1
+
+    run(scenario())
+
+
+def test_study_direction_defaults_to_russian_english(client):
+    async def scenario():
+        child = next(p for p in (await client.get("/api/profiles")).json() if p["role"] == "child")
+        await client.post("/api/auth/child", json={"user_id": child["id"]})
+        pack = (await client.get("/api/packs")).json()[0]
+        assert (await client.get("/api/config")).json()["direction"] == "ru-en"
+        default = (
+            await client.post("/api/practice", json={"pack_id": pack["id"], "kind": "choice"})
+        ).json()
+        assert default["direction"] == "ru-en"
+        assert default["tasks"][0]["prompt"] in {
+            word["translations"][0]
+            for word in (await client.get("/api/words")).json()
+            if word["id"] in pack["word_ids"]
+        }
+        chosen = (
+            await client.post(
+                "/api/practice",
+                json={"pack_id": pack["id"], "kind": "choice", "direction": "en-ru"},
+            )
+        ).json()
+        assert chosen["direction"] == "en-ru"
+        match = (
+            await client.post("/api/practice", json={"pack_id": pack["id"], "kind": "match"})
+        ).json()
+        assert match["direction"] == "en-ru"
 
     run(scenario())
 
@@ -526,20 +743,21 @@ def test_demo_seed_does_not_return_after_pack_deletion(database):
         assert db.scalars(select(Pack)).all() == []
 
 
-def test_homonyms_need_context_and_audio_skips_them(database):
+def test_homonyms_are_included_in_study_games(database):
     with database() as db:
         child = db.scalar(select(User).where(User.role == "child"))
         money = Word(english="bank", translations=["банк"])
         river = Word(english="bank", translations=["берег"])
         db.add_all([money, river])
         db.flush()
-        with pytest.raises(HTTPException):
-            create_practice(db, child, None, "all", "choice", "en-ru", 1, [money.id])
+        record_audio(money)
+        practice = create_practice(db, child, None, "all", "choice", "en-ru", 1, [money.id])
+        assert practice.tasks[0]["word_id"] == money.id
         money.example_en = "I keep money at the bank."
         practice = create_practice(db, child, None, "all", "choice", "en-ru", 1, [money.id])
         assert practice.tasks[0]["hint"] == money.example_en
-        with pytest.raises(HTTPException):
-            create_practice(db, child, None, "all", "listen", "en-ru", 1, [money.id])
+        practice = create_practice(db, child, None, "all", "listen", "en-ru", 1, [money.id])
+        assert practice.tasks[0]["word_id"] == money.id
 
 
 def test_progress_reset_requires_parent_confirmation(client):

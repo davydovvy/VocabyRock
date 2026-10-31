@@ -11,6 +11,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from .config import get_settings
+from .learning import display_english
 from .models import Pack, Word
 
 FONT_DIR = Path(__file__).parent / "assets" / "fonts"
@@ -106,7 +107,7 @@ def _header(pdf: canvas.Canvas, pack: Pack, variant: str, page: int):
 
 def _reference_lines(word: Word, text_width: float):
     return (
-        _wrap(word.english, "PackSans-Bold", ENGLISH_SIZE, text_width),
+        _wrap(display_english(word), "PackSans-Bold", ENGLISH_SIZE, text_width),
         _wrap(word.ipa or "", "PackSans", IPA_SIZE, text_width),
         _wrap(", ".join(word.translations), "PackSans", RUSSIAN_SIZE, text_width),
     )

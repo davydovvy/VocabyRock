@@ -6,7 +6,6 @@ import {
   Check,
   CircleHelp,
   Headphones,
-  Heart,
   Home,
   Keyboard,
   Layers3,
@@ -23,7 +22,6 @@ import {
   json,
   type Config,
   type Kind,
-  type Mode,
   type Pack,
   type Practice,
   type Profile,
@@ -32,6 +30,7 @@ import {
 } from './api'
 import { animal, Empty, packArt, ProgressBar, Shell, Speak, Star } from './ui'
 import BigMatch from './BigMatch'
+import { displayEnglish } from './wordDisplay'
 
 const games: { kind: Kind; title: string; icon: typeof Layers3; color: string }[] = [
   { kind: 'choice', title: 'Pick the Word', icon: CircleHelp, color: 'bg-[#d8eaff]' },
@@ -40,13 +39,6 @@ const games: { kind: Kind; title: string; icon: typeof Layers3; color: string }[
   { kind: 'type', title: 'Type It', icon: Keyboard, color: 'bg-[#e1f7e7]' },
   { kind: 'listen', title: 'Listen', icon: Headphones, color: 'bg-[#fff0ca]' },
 ]
-const modes: { mode: Mode; title: string; emoji: string; hint: string }[] = [
-  { mode: 'new', title: 'New Words', emoji: '🌱', hint: 'Meet new words' },
-  { mode: 'practice', title: 'Practice', emoji: '🎯', hint: 'Words ready now' },
-  { mode: 'hard', title: 'Hard Words', emoji: '💪', hint: 'Give them a try' },
-  { mode: 'all', title: 'All Words', emoji: '🌈', hint: 'Play them all' },
-]
-
 type View = 'home' | 'choose' | 'game' | 'words' | 'settings'
 
 export default function Child({
@@ -65,8 +57,7 @@ export default function Child({
   const [stats, setStats] = useState<Stats | null>(null)
   const [words, setWords] = useState<Word[]>([])
   const [pack, setPack] = useState<Pack | null>(null)
-  const [mode, setMode] = useState<Mode>('all')
-  const [direction, setDirection] = useState(config.direction)
+  const [direction, setDirection] = useState<'en-ru' | 'ru-en'>('ru-en')
   const [practice, setPractice] = useState<Practice | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -107,7 +98,7 @@ export default function Child({
     void refresh().catch((e) => setError(e.message))
   }, [])
 
-  const start = async (kind: Kind, chosenMode = mode, chosenPack = pack, wordIds?: number[]) => {
+  const start = async (kind: Kind, chosenMode = 'all', chosenPack = pack) => {
     setBusy(true)
     setError('')
     try {
@@ -118,7 +109,6 @@ export default function Child({
           mode: chosenMode,
           kind,
           direction: chosenMode === 'test' ? 'ru-en' : direction,
-          word_ids: wordIds,
         }),
       )
       setPractice(next)
@@ -137,7 +127,7 @@ export default function Child({
   }
   const openPack = (next: Pack | null) => {
     setPack(next)
-    setMode('all')
+    setDirection('ru-en')
     setView('choose')
     setError('')
   }
@@ -357,23 +347,6 @@ export default function Child({
                 </p>
               </div>
             </div>
-            <h2 className="mt-9 text-xl font-black">Pick words</h2>
-            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-              {modes.map((item) => (
-                <button
-                  key={item.mode}
-                  onClick={() => setMode(item.mode)}
-                  className={`rounded-2xl border-2 p-4 text-left min-h-28 transition-transform hover:-translate-y-1 ${mode === item.mode ? 'border-violet bg-[#f0eaff]' : 'border-[#e9e5f4] bg-white'}`}
-                  aria-pressed={mode === item.mode}
-                >
-                  <span className="text-3xl" aria-hidden="true">
-                    {item.emoji}
-                  </span>
-                  <span className="block font-black mt-1">{item.title}</span>
-                  <span className="block text-xs font-bold text-[#7d829d]">{item.hint}</span>
-                </button>
-              ))}
-            </div>
             <h2 className="mt-9 text-xl font-black">Pick a game</h2>
             <div className="choose-games mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
               {games
@@ -431,23 +404,9 @@ export default function Child({
             practice={practice}
             config={config}
             onHome={goHome}
-            onAgain={(mistakes) => {
-              if (mistakes?.length)
-                void start(
-                  practice.kind === 'match' || practice.kind === 'match_all'
-                    ? 'choice'
-                    : practice.kind,
-                  'mistakes',
-                  pack,
-                  mistakes,
-                )
-              else
-                void start(
-                  practice.kind === 'match_all' ? 'match' : practice.kind,
-                  practice.mode,
-                  pack,
-                )
-            }}
+            onAgain={() =>
+              void start(practice.kind === 'match_all' ? 'match' : practice.kind, 'all', pack)
+            }
             onUpdate={setPractice}
             onFinish={() => void refresh().catch(() => {})}
             onSuccess={playSuccess}
@@ -474,7 +433,7 @@ export default function Child({
                     </div>
                   )}
                   <div>
-                    <h2 className="font-black text-xl">{word.english}</h2>
+                    <h2 className="font-black text-xl">{displayEnglish(word)}</h2>
                     <p className="font-bold text-[#6b7190]">{word.translations.join(', ')}</p>
                     <p className="text-sm text-violet">{word.ipa}</p>
                   </div>
@@ -540,7 +499,7 @@ function Game({
   practice: Practice
   config: Config
   onHome: () => void
-  onAgain: (mistakes?: number[]) => void
+  onAgain: () => void
   onUpdate: (session: Practice) => void
   onFinish: () => void
   onSuccess: () => void
@@ -595,12 +554,16 @@ function Game({
         `/practice/${practice.id}/answer`,
         json('POST', { index: indexToSend, answer: value, option_id: optionId, rating }),
       )
-      setFeedback(response)
+      if (practice.kind !== 'flashcard') setFeedback(response)
       if (response.correct) onSuccess()
       if (!response.retry) {
         const updated = await api<Practice>(`/practice/${practice.id}`)
         onUpdate(updated)
         if (updated.finished) onFinish()
+        if (practice.kind === 'flashcard' && !updated.finished) {
+          setIndex(updated.tasks.findIndex((_, i) => !updated.results.some((r) => r.index === i)))
+          setRevealed(null)
+        }
       }
     } catch (e) {
       setError((e as Error).message)
@@ -706,8 +669,14 @@ function Game({
           {practice.kind === 'match' && practice.tasks[0]?.big_match ? 'You Rock!' : 'Great job!'}
         </h1>
         <p className="mt-2 text-xl font-bold text-[#6b7190]">
-          {practice.kind === 'match' && practice.tasks[0]?.big_match ? 'First check: ' : 'You got '}
-          {correctCount} of {practice.tasks.length} right!
+          {practice.kind === 'match' && practice.tasks[0]?.big_match
+            ? 'First check: '
+            : practice.kind === 'flashcard'
+              ? ''
+              : 'You got '}
+          {practice.kind === 'flashcard'
+            ? `${practice.tasks.length} cards reviewed!`
+            : `${correctCount} of ${practice.tasks.length} right!`}
         </p>
         <div className="card mt-7 p-7">
           <ProgressBar value={(correctCount / practice.tasks.length) * 100} />
@@ -766,11 +735,6 @@ function Game({
           {practice.mode !== 'test' && (
             <button className="btn-primary text-lg" onClick={() => onAgain()}>
               <RotateCcw /> Play Again
-            </button>
-          )}
-          {practice.mode !== 'test' && mistakes.length > 0 && (
-            <button className="btn-coral text-lg" onClick={() => onAgain(mistakes)}>
-              <Heart /> Practice Mistakes
             </button>
           )}
           <button className="btn-soft text-lg" onClick={onHome}>
@@ -978,9 +942,9 @@ function Game({
                   alt="Word picture"
                 />
               )}
-              {practice.kind !== 'type' && task.ipa && (
-                <p className="mt-2 text-violet font-bold">{task.ipa}</p>
-              )}
+              {practice.kind !== 'type' &&
+                (practice.kind !== 'flashcard' || practice.direction === 'en-ru') &&
+                task.ipa && <p className="mt-2 text-violet font-bold">{task.ipa}</p>}
               {task.hint && (
                 <p className="mx-auto mt-3 max-w-lg rounded-2xl bg-[#fff4d8] p-3 text-lg font-bold">
                   {task.hint}
@@ -1016,31 +980,18 @@ function Game({
                 <>
                   <div className="rounded-2xl bg-[#f3eeff] p-5 text-3xl font-black">
                     {revealed.join(', ')}
+                    {practice.direction === 'ru-en' && task.ipa && (
+                      <span className="block mt-2 text-lg text-violet">{task.ipa}</span>
+                    )}
                   </div>
-                  <p className="mt-6 font-bold">Did you know it?</p>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
-                    <button
-                      disabled={busy}
-                      className="btn-soft"
-                      onClick={() => void submit(index, undefined, undefined, 'again')}
-                    >
-                      Didn't Know
-                    </button>
-                    <button
-                      disabled={busy}
-                      className="btn-soft"
-                      onClick={() => void submit(index, undefined, undefined, 'hard')}
-                    >
-                      Hard
-                    </button>
-                    <button
-                      disabled={busy}
-                      className="btn-mint"
-                      onClick={() => void submit(index, undefined, undefined, 'easy')}
-                    >
-                      Easy
-                    </button>
-                  </div>
+                  <button
+                    disabled={busy}
+                    className="btn-primary mt-6 text-xl px-10"
+                    onClick={() => void submit(index)}
+                  >
+                    {index === practice.tasks.length - 1 ? 'See Stars' : 'Next word'}
+                    <ArrowRight />
+                  </button>
                 </>
               )}
             </div>
@@ -1106,20 +1057,31 @@ function Game({
                   className="mt-9 flex flex-col sm:flex-row gap-3"
                   onSubmit={(e) => {
                     e.preventDefault()
-                    if (typed.trim()) void submit(index, typed)
+                    if (typed.trim()) void submit(index, `${task.answer_prefix || ''}${typed}`)
                   }}
                 >
-                  <input
-                    autoFocus={
-                      typeof window.matchMedia !== 'function' ||
-                      !window.matchMedia('(pointer: coarse)').matches
-                    }
-                    className="field text-xl flex-1"
-                    value={typed}
-                    onChange={(e) => setTyped(e.target.value)}
-                    placeholder="Type here"
-                    aria-label="Your answer"
-                  />
+                  <div className="flex flex-1">
+                    {task.answer_prefix && (
+                      <span
+                        id={`answer-prefix-${index}`}
+                        className="flex items-center rounded-l-2xl border-2 border-r-0 border-[#ddd6f3] bg-[#f3eeff] px-4 text-xl font-black text-violet"
+                      >
+                        {task.answer_prefix.trim()}
+                      </span>
+                    )}
+                    <input
+                      autoFocus={
+                        typeof window.matchMedia !== 'function' ||
+                        !window.matchMedia('(pointer: coarse)').matches
+                      }
+                      className={`field min-w-0 flex-1 text-xl ${task.answer_prefix ? 'rounded-l-none' : ''}`}
+                      value={typed}
+                      onChange={(e) => setTyped(e.target.value)}
+                      placeholder="Type here"
+                      aria-label="Your answer"
+                      aria-describedby={task.answer_prefix ? `answer-prefix-${index}` : undefined}
+                    />
+                  </div>
                   <button
                     disabled={busy || !typed.trim()}
                     className="btn-primary text-xl"

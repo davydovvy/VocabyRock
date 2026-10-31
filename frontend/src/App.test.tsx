@@ -46,6 +46,7 @@ let answeredIndices: number[] = []
 let practiceTasks: {
   prompt: string
   ipa?: string
+  answer_prefix?: string
   options?: { token: number; text: string }[]
   big_match?: boolean
   locked?: boolean
@@ -60,9 +61,10 @@ let practiceTasks: {
   },
 ]
 let requests: string[] = []
+let submittedAnswers: string[] = []
 let startedPractices: { mode: string; kind: string; direction: string; pack_id: number | null }[] =
   []
-let practiceKind: 'choice' | 'type' | 'match' = 'choice'
+let practiceKind: 'choice' | 'type' | 'match' | 'flashcard' = 'choice'
 let practiceDirection: 'en-ru' | 'ru-en' = 'en-ru'
 let fullHintUsed = false
 let firstMatchResults:
@@ -90,7 +92,7 @@ function response(value: unknown, status = 200) {
     headers: { 'Content-Type': 'application/json' },
   })
 }
-function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' = 'choice') {
+function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' | 'flashcard' = 'choice') {
   loggedIn = null
   answeredIndices = []
   practiceKind = kind
@@ -123,6 +125,7 @@ function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' = 'choice') {
           ]
   ).slice(0, taskCount)
   requests = []
+  submittedAnswers = []
   startedPractices = []
   pictureUploadFailures = 0
   learnedChildren = new Set()
@@ -231,8 +234,13 @@ function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' = 'choice') {
         if (level === 2) fullHintUsed = true
         return response({ hint: level === 1 ? 'M----y' : 'Monday' })
       }
+      if (path.startsWith('/practice/10/reveal/') && options?.method === 'POST') {
+        return response({ answers: [practiceDirection === 'ru-en' ? 'cat' : 'кошка'] })
+      }
       if (path === '/practice/10/answer') {
-        const index = JSON.parse(String(options?.body)).index as number
+        const body = JSON.parse(String(options?.body))
+        const index = body.index as number
+        if (body.answer) submittedAnswers.push(body.answer)
         answeredIndices.push(index)
         return response({
           correct: !fullHintUsed,
@@ -378,13 +386,114 @@ describe('critical child and parent interactions', () => {
     await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
     expect(await screen.findByRole('heading', { name: /Ready to study/ })).toBeTruthy()
     await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    expect(
+      (await screen.findByRole('button', { name: 'Russian → English' })).getAttribute(
+        'aria-pressed',
+      ),
+    ).toBe('true')
     await user.click(await screen.findByRole('button', { name: /Pick the Word/ }))
+    expect(startedPractices.at(-1)?.direction).toBe('ru-en')
     expect(await screen.findByText('cat')).toBeTruthy()
     await user.click(screen.getByRole('button', { name: 'кошка' }))
     expect(await screen.findByText('Great!')).toBeTruthy()
     await user.click(screen.getByRole('button', { name: /See Stars/ }))
     expect(await screen.findByText('Great job!')).toBeTruthy()
     expect(requests.some((x) => x.includes('/practice/10/answer'))).toBe(true)
+  })
+
+  it('shows no word filters and advances flip cards with one button after reveal', async () => {
+    mockApi(2, 'flashcard')
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await screen.findByText('Animal friends')
+    await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    expect(screen.queryByText('Pick words')).toBeNull()
+    await user.click(await screen.findByRole('button', { name: 'Flip Cards' }))
+    await user.click(screen.getByRole('button', { name: 'Reveal' }))
+    expect(await screen.findByRole('button', { name: 'Next word' })).toBeTruthy()
+    expect(screen.queryByText('Did you know it?')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Next word' }))
+    expect(await screen.findByText('dog')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Reveal' }))
+    await user.click(await screen.findByRole('button', { name: 'See Stars' }))
+    expect(await screen.findByText('2 cards reviewed!')).toBeTruthy()
+    expect(requests.filter((request) => request === 'POST /practice/10/answer')).toHaveLength(2)
+  })
+
+  it('reveals transcription beside the English answer on Russian to English flip cards', async () => {
+    mockApi(1, 'flashcard')
+    practiceTasks = [{ prompt: 'кошка', ipa: '/kæt/' }]
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await screen.findByText('Animal friends')
+    await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    await user.click(await screen.findByRole('button', { name: 'Russian → English' }))
+    await user.click(await screen.findByRole('button', { name: 'Flip Cards' }))
+    expect(screen.getByText('кошка')).toBeTruthy()
+    expect(screen.queryByText('/kæt/')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Reveal' }))
+    const answer = await screen.findByText('cat')
+    expect(within(answer).getByText('/kæt/')).toBeTruthy()
+  })
+
+  it('keeps noun and verb prefixes fixed while typing English answers', async () => {
+    mockApi(3, 'type')
+    practiceTasks = [
+      { prompt: 'кот', answer_prefix: 'a ' },
+      { prompt: 'плавать', answer_prefix: 'to ' },
+      { prompt: 'яблоко', answer_prefix: 'an ' },
+    ]
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await screen.findByText('Animal friends')
+    await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    await user.click(await screen.findByRole('button', { name: 'Russian → English' }))
+    await user.click(await screen.findByRole('button', { name: 'Type It' }))
+    let input = screen.getByRole('textbox', { name: 'Your answer' })
+    expect(within(input.parentElement as HTMLElement).getByText('a')).toBeTruthy()
+    await user.type(input, 'cat{enter}')
+    expect(submittedAnswers).toEqual(['a cat'])
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    input = screen.getByRole('textbox', { name: 'Your answer' })
+    expect(within(input.parentElement as HTMLElement).getByText('to')).toBeTruthy()
+    await user.type(input, 'swim{enter}')
+    expect(submittedAnswers).toEqual(['a cat', 'to swim'])
+    await user.click(await screen.findByRole('button', { name: 'Next' }))
+    input = screen.getByRole('textbox', { name: 'Your answer' })
+    expect(within(input.parentElement as HTMLElement).getByText('an')).toBeTruthy()
+    await user.type(input, 'apple{enter}')
+    expect(submittedAnswers).toEqual(['a cat', 'to swim', 'an apple'])
+  })
+
+  it('shows prefixes only for singular countable nouns and verbs in My Words', async () => {
+    mockApi()
+    savedWords.push(
+      ...[
+        { english: 'cat', part_of_speech: 'singular countable', ipa: '/kæt/' },
+        { english: 'apple', part_of_speech: 'singular countable', ipa: '/ˈæpəl/' },
+        { english: 'dogs', part_of_speech: 'plural countable', ipa: null },
+        { english: 'water', part_of_speech: 'uncountable', ipa: null },
+        { english: 'swim', part_of_speech: 'verb', ipa: null },
+      ].map((entry, index) => ({
+        id: index + 1,
+        ...entry,
+        translations: ['перевод'],
+        picture: null,
+        example_en: null,
+        example_ru: null,
+        notes: null,
+      })),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await user.click(await screen.findByRole('button', { name: /My Words/ }))
+    for (const label of ['a cat', 'an apple', 'dogs', 'water', 'to swim']) {
+      expect(await screen.findByRole('heading', { name: label })).toBeTruthy()
+    }
   })
 
   it('offers both printable pack sheets in the parent area', async () => {
@@ -643,13 +752,14 @@ describe('critical child and parent interactions', () => {
     expect(screen.queryByLabelText('English example')).toBeNull()
     expect(screen.queryByLabelText('Russian example')).toBeNull()
     expect(screen.queryByLabelText('Notes')).toBeNull()
-    await user.selectOptions(partOfSpeech, 'noun')
+    expect(within(partOfSpeech).queryByRole('option', { name: 'noun' })).toBeNull()
+    await user.selectOptions(partOfSpeech, 'singular countable')
     await user.type(screen.getByLabelText('English'), 'tree')
     await user.type(screen.getByLabelText('Russian translations (separate with ;)'), 'дерево')
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     expect(await screen.findByText('tree')).toBeTruthy()
     expect(savedWords[0].translations).toEqual(['дерево'])
-    expect(savedWords[0].part_of_speech).toBe('noun')
+    expect(savedWords[0].part_of_speech).toBe('singular countable')
   })
 
   it('adds a new word from a pack and opens pack words for editing', async () => {
@@ -813,9 +923,9 @@ describe('critical child and parent interactions', () => {
     ])
     await user.click(await screen.findByRole('button', { name: /де́рево/ }))
     expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/tɹiː/')
-    expect(
-      (screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement).value,
-    ).toBe('noun')
+    const nounType = screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement
+    expect(nounType.value).toBe('')
+    await user.selectOptions(nounType, 'singular countable')
     await user.click(screen.getByRole('radio', { name: /US/ }))
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     await waitFor(() => expect(savedWords).toHaveLength(1))

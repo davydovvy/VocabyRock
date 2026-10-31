@@ -7,7 +7,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 - React, TypeScript, Vite, and Tailwind CSS build a responsive single page app.
 - FastAPI serves the compiled app and REST API from the same origin.
 - SQLite stores users, shared vocabulary, packs, sessions, settings, and each child's progress by word and direction. Each word and pack has a stable GUID for portable vocabulary archives. SQLAlchemy models and Alembic migrations manage the schema.
-- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. A selected Wikimedia pronunciation is downloaded to the same volume for offline playback; browser speech synthesis is the fallback for words without a recording.
+- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. A selected Wikimedia pronunciation is downloaded to the same volume for offline playback. Word-list speaker buttons can use browser speech synthesis when no recording is stored; the Listen game requires a downloaded recording.
 - One container runs FastAPI. Docker Compose bind mounts one persistent directory.
 
 ## Repository layout
@@ -32,7 +32,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 
 On first startup, VacabyRock creates the parent profile, two child profiles, and Animals, Food, and Everyday Objects packs with 30 sample words. Later restarts keep all data. The initial parent password is read from `.env`; the example placeholder does not grant access.
 
-The first Docker build downloads build dependencies. Parent picture searches, dictionary lookups, and pronunciation downloads need internet access. Once a recording is ready, children can play it without internet access. Words without a saved recording use the device's English speech voice when available.
+The first Docker build downloads build dependencies. Parent picture searches, dictionary lookups, and pronunciation downloads need internet access. Once a recording is ready, children can play it without internet access. Word-list speaker buttons can use the device's English speech voice when no recording is saved.
 
 ## Synology DiskStation
 
@@ -84,7 +84,11 @@ It selects a child, plays through a pack, checks the result, signs in as the par
 
 ## Parent workflow
 
-Choose the locked Parent avatar and enter `ADMIN_PASSWORD`. In **Settings → Children**, change a child's name beside their avatar and click **Save**. Add words to the library with one or more Russian translations and optional IPA. **Part of speech** is a dropdown that starts blank. English words keep their typed capitalization; Russian translations become lowercase. **Fill from Wikimedia** searches without regard to capitalization and replaces the English field with the dictionary's spelling when it finds an entry. In **Add Word** or **Edit Word**, upload a JPEG, PNG, or WebP picture (up to 8 MB), or choose one from Pixabay, then click **Save Word**. Vocabulary cards use a responsive grid and show the picture, English word, IPA, and translations, with edit and delete icons on the right. The server checks and resizes saved pictures to local WebP files. Create packs, open **Manage Words**, and use **New Word** to create a word directly in that pack or the pencil button to edit one of its words. Pack word lists also show pictures and IPA. Existing library words can still be added to multiple packs. A word already in the library cannot be created again under a different capitalization or translation; choose it from the existing-word list instead. Deleting a pack keeps its words in the library.
+Choose the locked Parent avatar and enter `ADMIN_PASSWORD`. In **Settings → Children**, change a child's name beside their avatar and click **Save**. Add words to the library with one or more Russian translations and optional IPA. **Part of speech** starts blank and offers singular countable, plural countable, and uncountable nouns separately, along with verbs and other parts of speech. A singular countable noun displays `a` or `an` according to the first sound in its IPA transcription: `a university` and `an hour`, for example. Without IPA it displays no article until a transcription is added. Verbs display `to`. These prefixes appear in vocabulary lists, pack lists, printable word sheets, study questions, and English answer choices; the stored English spelling remains unchanged. Existing words labeled only `noun` keep their spelling until you classify them.
+
+English words keep their typed capitalization; Russian translations become lowercase. **Fill from Wikimedia** searches without regard to capitalization and replaces the English field with the dictionary's spelling when it finds an entry. Its generic `noun` result leaves the noun type for you to choose. In **Add Word** or **Edit Word**, upload a JPEG, PNG, or WebP picture (up to 8 MB), or choose one from Pixabay, then click **Save Word**. Vocabulary cards use a responsive grid and show the picture, English word, IPA, and translations, with edit and delete icons on the right. The server checks and resizes saved pictures to local WebP files.
+
+Create packs, open **Manage Words**, and use **New Word** to create a word directly in that pack or the pencil button to edit one of its words. Pack word lists also show pictures and IPA. Existing library words can still be added to multiple packs. A word already in the library cannot be created again under a different capitalization or translation; choose it from the existing-word list instead. Deleting a pack keeps its words in the library.
 
 In **Vocabulary** and a pack's **Manage Words** list, each word has a checkbox labeled with each child's name. Check it to mark the word learned for that child, or uncheck it to mark the word unlearned. The two children have independent progress, and changing a checkbox keeps the word's practice counts. Unchecking also resets that word's correct typing streak. The same learned state appears in both lists and in the Progress area.
 
@@ -102,7 +106,7 @@ After saving, the picture is cleared everywhere the word appears, including pack
 
 In **Add Word** or **Edit Word**, enter the English word and click **Fill from Wikimedia**. Typing alone sends no lookup requests. The button queries [WiktAPI](https://wiktapi.dev/quickstart) for Russian translation choices, IPA, part of speech, and available recordings. US pronunciations appear first; if the entry lists a US spelling, the form offers it. Select translations and a recording, then review the visible fields before saving. Missing information stays blank for manual entry.
 
-Saving creates the word immediately. If a recording was selected, the library shows **Audio queued for download**, **Audio retry scheduled**, or an error with **Retry audio** while the download is pending or has failed. Once a recording is saved, a speaker button appears beside the word in both **Vocabulary** and the pack's **Manage Words** list; click it to hear the locally stored pronunciation. A single background worker downloads recordings to the Synology data volume and resumes pending work after a restart. It spaces downloads and honors Wikimedia's `Retry-After` response; a rate limit can delay audio without losing the word. After eight unsuccessful attempts, use **Retry audio** to queue it again. The child's Listen game uses the saved recording offline, falling back to browser speech synthesis when no recording is stored.
+Saving creates the word immediately. If a recording was selected, the library shows **Audio queued for download**, **Audio retry scheduled**, or an error with **Retry audio** while the download is pending or has failed. Once a recording is saved, a speaker button appears beside the word in both **Vocabulary** and the pack's **Manage Words** list; click it to hear the locally stored pronunciation. A single background worker downloads recordings to the Synology data volume and resumes pending work after a restart. It spaces downloads and honors Wikimedia's `Retry-After` response; a rate limit can delay audio without losing the word. After eight unsuccessful attempts, use **Retry audio** to queue it again. The child's Listen game selects only unlearned words with a downloaded local recording. If none qualify, it explains that no recorded words are available.
 
 The lookup needs access to `api.wiktapi.dev`; audio downloads need access to `upload.wikimedia.org`. No dictionary API key is required. Wikimedia does not promise a fixed download quota and says limits can change; the app waits and retries when it receives a limit response. See [Wikimedia's API usage guidelines](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_API_Usage_Guidelines).
 
@@ -114,7 +118,11 @@ In **Word Packs**, the parent can download two A4 PDFs for any pack. **Word shee
 
 ## Learning and settings
 
-Children can choose **Study** on a pack to select New Words, Practice, Hard Words, or All Words, then choose Big Match, Flip Cards, Pick the Word, Type It, or Listen. **Test** asks for the English spelling of every word in that pack that is not yet learned; it uses keyboard entry and offers no hints. A child learns a word after typing its English spelling correctly twice in a row without hints. A wrong spelling resets that word's streak. Case and extra spaces do not matter, but the optional typo tolerance does not count toward learning. Choices, cards, and matching still provide practice without marking words learned. A pack is learned once at least 90% of its words are learned. The parent can set game length, default direction, American or British speech, exercise availability, handling of Russian `е`/`ё`, optional one letter typo tolerance, and avatar choice. All settings persist in SQLite.
+Children can choose **Study** on a pack and then pick Big Match, Flip Cards, Pick the Word, Type It, or Listen. Each game except Big Match includes every unlearned word in the pack; Listen includes only those with a downloaded recording. The default direction is Russian to English, and children can switch direction before starting a game. **Test** asks for the English spelling of every unlearned word in the pack, uses keyboard entry, and offers no hints.
+
+When typing a singular countable noun with IPA in Russian-to-English practice, the required `a` or `an` appears beside the input and cannot be edited. Verbs similarly show a fixed `to`. The child types only the word itself. A child learns a word after typing its English spelling correctly twice in a row without hints. A wrong spelling resets that word's streak. Case and extra spaces do not matter, but the optional typo tolerance does not count toward learning. Choices and matching provide practice without marking words learned; flipping cards also leaves learning progress unchanged.
+
+A pack is learned once at least 90% of its words are learned. The parent can set American or British speech, exercise availability, handling of Russian `е`/`ё`, optional one letter typo tolerance, and avatar choice. These settings persist in SQLite.
 
 ### Big Match
 
@@ -122,9 +130,9 @@ Big Match is the only matching game in the child menu. It presents eight English
 
 The game gives no right or wrong hints while placing tiles. **Check** becomes available after all eight cards are filled. Correct pairs turn green and lock; incorrect pairs turn orange and remain movable. Fill any emptied cards and check again until all eight are correct. **Play Again** and **Home** appear on the results screen.
 
-The first Check alone sets the score, XP, stars, and review progress. Later correction checks do not create more attempts or rewards. Progress is tracked separately for each child. Big Match always asks English to Russian, uses eight distinct English words with uniquely matchable Russian translations, and ignores the general session length setting. If the chosen pack and mode cannot provide eight suitable words, the child sees a message to try another pack or mode. Earlier matching sessions remain in historical records, but the retired games cannot be started from the menu.
+The first Check alone sets the score, XP, stars, and review progress. Later correction checks do not create more attempts or rewards. Progress is tracked separately for each child. Big Match always asks English to Russian and uses eight distinct unlearned words with uniquely matchable Russian translations. If the chosen pack cannot provide eight suitable words, the child sees a message to try another pack. Earlier matching sessions remain in historical records, but the retired games cannot be started from the menu.
 
-In Type It, transcriptions are hidden. The first hint shows the first and last letters, such as `M----y` for Monday, without counting as a mistake. The second reveals the whole answer and immediately adds that word to mistakes for later practice. After checking an answer, Enter advances to **Next**. Both directions are available for the other games.
+In Type It, transcriptions are hidden. The first hint shows the first and last letters, such as `M----y` for Monday, without counting as a mistake. The second reveals the whole answer and immediately records a mistake for that word. After checking an answer, Enter advances to **Next**. Flip Cards show the answer after **Reveal**, then advance with one button rather than asking the child to rate the word. In Russian-to-English Flip Cards, the English transcription appears with the revealed answer. Both directions are available for the other games.
 
 Correct answers lengthen review intervals; missed words return sooner. Reviews are tracked separately for each child and translation direction. XP, levels, stars, and achievements are motivational only and do not change review scheduling.
 
@@ -166,7 +174,7 @@ Create a backup, update the source, then run `docker compose up -d --build`. Sta
 
 ## Known limitations
 
-- Browser speech voices vary by device. A word without a saved recording cannot be heard in the Listen game when speech synthesis is unavailable.
+- Listen requires a downloaded pronunciation file for each word it asks. Words without one remain available in the other games.
 - Child profiles have no passwords. Keep the service on a trusted LAN.
 - Pictures use uploaded files or local emoji placeholders; the sample packs do not include licensed artwork.
 - Pixabay search needs an API key and internet access. The app downloads the selected 150 px preview and saves it locally; if Pixabay limits that download, the app retries briefly and may ask you to try again later.

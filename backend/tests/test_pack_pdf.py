@@ -18,10 +18,24 @@ def test_pack_printouts_include_pictures_and_hide_test_answers(client, database)
         image = io.BytesIO()
         Image.new("RGB", (100, 80), "orange").save(image, "PNG")
         word.picture = save_picture_data(image.getvalue())
-        monkey = Word(english="monkey", translations=["обезьяна"], ipa="/ˈmʌŋki/")
+        monkey = Word(
+            english="monkey",
+            translations=["обезьяна"],
+            ipa="/ˈmʌŋki/",
+            part_of_speech="singular countable",
+        )
         db.add(monkey)
         db.flush()
         db.add(PackWord(pack_id=pack.id, word_id=monkey.id, position=10))
+        apple = Word(
+            english="apple",
+            translations=["яблоко"],
+            ipa="/ˈæpəl/",
+            part_of_speech="singular countable",
+        )
+        db.add(apple)
+        db.flush()
+        db.add(PackWord(pack_id=pack.id, word_id=apple.id, position=11))
         db.commit()
         pack_id = pack.id
 
@@ -51,6 +65,8 @@ def test_pack_printouts_include_pictures_and_hide_test_answers(client, database)
         assert "/kæt/" in reference_text
         assert "кошка" in reference_text
         assert "monkey" in reference_text
+        assert "a monkey" in reference_text
+        assert "an apple" in reference_text
         assert "кошка" in test_text
         assert "обезьяна" in test_text
         assert "cat" not in test_text

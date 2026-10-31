@@ -14,10 +14,11 @@ test('child plays, parent adds a word, child finds it', async ({ page }) => {
     .getByRole('button', { name: 'Study' })
     .click()
   await page.getByRole('button', { name: 'Flip Cards' }).click()
-  for (let i = 0; i < 10; i++) {
+  const counter = await page.locator('.game-toolbar span').last().textContent()
+  const total = Number(counter?.split('/')[1])
+  for (let i = 0; i < total; i++) {
     await page.getByRole('button', { name: 'Reveal' }).click()
-    await page.getByRole('button', { name: 'Easy' }).click()
-    await page.getByRole('button', { name: i === 9 ? 'See Stars' : 'Next' }).click()
+    await page.getByRole('button', { name: i === total - 1 ? 'See Stars' : 'Next word' }).click()
   }
   await expect(page.getByText('Great job!')).toBeVisible()
   await page.getByRole('button', { name: 'Home' }).click()

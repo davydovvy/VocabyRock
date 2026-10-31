@@ -32,6 +32,7 @@ import {
   type WordInput,
 } from './api'
 import { animal, Avatar, Empty, packArt, ProgressBar, Shell } from './ui'
+import { displayEnglish } from './wordDisplay'
 
 type Tab = 'overview' | 'words' | 'packs' | 'import' | 'progress' | 'settings'
 const blankWord: WordInput = {
@@ -44,7 +45,9 @@ const blankWord: WordInput = {
   notes: '',
 }
 const partsOfSpeech = [
-  'noun',
+  'singular countable',
+  'plural countable',
+  'uncountable',
   'verb',
   'adjective',
   'adverb',
@@ -253,7 +256,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       words.filter(
         (w) =>
           (!filterPack || packs.find((p) => p.id === filterPack)?.word_ids.includes(w.id)) &&
-          `${w.english} ${w.translations.join(' ')}`.toLowerCase().includes(query.toLowerCase()),
+          `${displayEnglish(w)} ${w.translations.join(' ')}`
+            .toLowerCase()
+            .includes(query.toLowerCase()),
       ),
     [words, query, filterPack, packs],
   )
@@ -329,7 +334,8 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         ...current,
         english: result.word || current.english,
         ipa: current.ipa || result.ipa,
-        part_of_speech: current.part_of_speech || result.part_of_speech,
+        part_of_speech:
+          current.part_of_speech || (result.part_of_speech === 'noun' ? '' : result.part_of_speech),
       }))
     } catch (e) {
       if (dictionaryRequest.current === requestId) setDictionaryError((e as Error).message)
@@ -667,7 +673,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <h3 className="font-black leading-tight break-words">{word.english}</h3>
+                      <h3 className="font-black leading-tight break-words">
+                        {displayEnglish(word)}
+                      </h3>
                       {word.ipa && (
                         <p className="text-xs font-bold text-violet break-words">{word.ipa}</p>
                       )}
@@ -822,7 +830,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     .filter((w) => !selectedPack.word_ids.includes(w.id))
                     .map((w) => (
                       <option key={w.id} value={w.id}>
-                        {w.english} — {w.translations.join(', ')}
+                        {displayEnglish(w)} — {w.translations.join(', ')}
                       </option>
                     ))}
                 </select>
@@ -858,7 +866,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                       </div>
                       <div className="min-w-32 flex-1">
                         <p className="font-black leading-tight break-words">
-                          {word.english}
+                          {displayEnglish(word)}
                           {word.ipa && (
                             <span className="ml-2 text-sm font-bold text-violet">{word.ipa}</span>
                           )}
@@ -1051,10 +1059,10 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     {data?.upcoming_reviews.length
                       ? data.upcoming_reviews
                           .slice(0, 5)
-                          .map(
-                            (r) =>
-                              `${words.find((w) => w.id === r.word_id)?.english || 'Word'} (${new Date(r.next_review_at).toLocaleDateString()})`,
-                          )
+                          .map((r) => {
+                            const word = words.find((w) => w.id === r.word_id)
+                            return `${word ? displayEnglish(word) : 'Word'} (${new Date(r.next_review_at).toLocaleDateString()})`
+                          })
                           .join(' · ')
                       : 'None yet'}
                   </p>
@@ -1092,7 +1100,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                       <option value="">Reset a word…</option>
                       {words.map((w) => (
                         <option key={w.id} value={w.id}>
-                          {w.english} — {w.translations[0]}
+                          {displayEnglish(w)} — {w.translations[0]}
                         </option>
                       ))}
                     </select>
@@ -1106,16 +1114,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="card p-6">
             <h2 className="text-2xl font-black">Learning Settings</h2>
-            <label className="label mt-5">Questions per game</label>
-            <input
-              className="field"
-              type="number"
-              min="1"
-              max="30"
-              value={settings.session_length}
-              onChange={(e) => setSettings({ ...settings, session_length: Number(e.target.value) })}
-            />
-            <label className="label mt-4">English accent</label>
+            <label className="label mt-5">English accent</label>
             <select
               className="field"
               value={settings.accent}
@@ -1123,15 +1122,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             >
               <option value="en-US">American English</option>
               <option value="en-GB">British English</option>
-            </select>
-            <label className="label mt-4">Default word direction</label>
-            <select
-              className="field"
-              value={settings.direction}
-              onChange={(e) => setSettings({ ...settings, direction: e.target.value })}
-            >
-              <option value="en-ru">English → Russian</option>
-              <option value="ru-en">Russian → English</option>
             </select>
             <label className="mt-5 flex items-center gap-3 font-bold">
               <input
@@ -1330,6 +1320,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
               value={wordForm.ipa || ''}
               onChange={(value) => setWordForm({ ...wordForm, ipa: value })}
             />
+            {wordForm.part_of_speech === 'singular countable' && !wordForm.ipa?.trim() && (
+              <p className="text-sm font-bold text-violet">
+                Add an IPA transcription to show the correct a/an article.
+              </p>
+            )}
             <label>
               <span className="label">Part of speech</span>
               <select
@@ -1351,6 +1346,11 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                 ))}
               </select>
             </label>
+            {dictionary?.part_of_speech === 'noun' && !wordForm.part_of_speech && (
+              <p className="mt-1 text-sm font-bold text-violet">
+                Choose whether this noun is singular countable, plural countable, or uncountable.
+              </p>
+            )}
           </div>
           <section className="mt-6 rounded-2xl border-2 border-[#e5ddf5] p-4">
             <h3 className="font-black text-lg">Picture</h3>
@@ -1686,14 +1686,17 @@ function WordStatusList({
       <h3 className="font-black">{title}</h3>
       <div className="mt-2 max-h-36 overflow-auto space-y-1">
         {rows.length ? (
-          rows.map((row) => (
-            <p key={row.id} className="text-sm font-bold text-[#646b89]">
-              {words.find((word) => word.id === row.word_id)?.english || 'Removed word'}{' '}
-              <span className="text-violet">
-                {row.direction === 'en-ru' ? 'EN → RU' : 'RU → EN'}
-              </span>
-            </p>
-          ))
+          rows.map((row) => {
+            const word = words.find((item) => item.id === row.word_id)
+            return (
+              <p key={row.id} className="text-sm font-bold text-[#646b89]">
+                {word ? displayEnglish(word) : 'Removed word'}{' '}
+                <span className="text-violet">
+                  {row.direction === 'en-ru' ? 'EN → RU' : 'RU → EN'}
+                </span>
+              </p>
+            )
+          })
         ) : (
           <p className="text-sm text-[#8a8fa8]">No words yet</p>
         )}

@@ -120,7 +120,7 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     session_length: Mapped[int] = mapped_column(Integer, default=10)
     accent: Mapped[str] = mapped_column(String(8), default="en-US")
-    direction: Mapped[str] = mapped_column(String(8), default="en-ru")
+    direction: Mapped[str] = mapped_column(String(8), default="ru-en")
     fold_yo: Mapped[bool] = mapped_column(Boolean, default=True)
     lenient_typos: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_exercises: Mapped[list] = mapped_column(

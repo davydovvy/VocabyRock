@@ -64,6 +64,7 @@ export type Kind = 'match' | 'match_all' | 'flashcard' | 'choice' | 'type' | 'li
 export type Mode = 'quick' | 'new' | 'practice' | 'hard' | 'all' | 'mistakes' | 'test'
 export type Task = {
   prompt?: string | null
+  answer_prefix?: string
   picture?: string | null
   ipa?: string | null
   audio?: string | null

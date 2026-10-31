@@ -2,11 +2,13 @@ import random
 import re
 import secrets
 from datetime import timedelta
+from pathlib import Path
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .models import AppSettings, PackWord, PracticeSession, Progress, User, Word, now
 
 
@@ -40,6 +42,42 @@ def check_text(answer: str, accepted: list[str], settings: AppSettings) -> bool:
 def exact_english(answer: str, english: str) -> bool:
     """Ignore case and extra spacing, but never accept a misspelled word."""
     return " ".join(answer.casefold().split()) == " ".join(english.casefold().split())
+
+
+_VOWEL_SOUNDS = set("aeiouæɑɐɒəɛɜɞɘɵøɶɪʊʌɨʉɯɤɔœɚɝ")
+
+
+def english_prefix(word: Word) -> str:
+    if word.part_of_speech == "verb":
+        return "to "
+    if word.part_of_speech == "singular countable" and word.ipa:
+        first_sound = next(
+            (char for char in word.ipa.casefold() if char.isalpha() and char not in "ˈˌːˑ"),
+            "",
+        )
+        if first_sound:
+            return "an " if first_sound in _VOWEL_SOUNDS else "a "
+    return ""
+
+
+def display_english(word: Word) -> str:
+    prefix = english_prefix(word)
+    if word.part_of_speech == "singular countable":
+        return prefix + re.sub(r"^(?:a|an)\s+", "", word.english.strip(), flags=re.IGNORECASE)
+    if word.part_of_speech == "verb":
+        return prefix + re.sub(r"^to\s+", "", word.english.strip(), flags=re.IGNORECASE)
+    return word.english
+
+
+def has_downloaded_audio(word: Word) -> bool:
+    if not word.audio:
+        return False
+    filename = Path(word.audio).name
+    return (
+        word.audio == f"/audio/{filename}"
+        and Path(filename).suffix in {".mp3", ".ogg"}
+        and (get_settings().data_dir / "audio" / filename).is_file()
+    )
 
 
 def update_progress(
@@ -99,9 +137,8 @@ def _select_words(
     db: Session,
     user: User,
     pack_id: int | None,
-    mode: str,
     direction: str,
-    limit: int,
+    limit: int | None,
     word_ids: list[int] | None,
 ):
     query = select(Word)
@@ -110,30 +147,11 @@ def _select_words(
     if word_ids is not None:
         query = query.where(Word.id.in_(word_ids))
     words = db.scalars(query).unique().all()
-    progress = {
-        p.word_id: p
-        for p in db.scalars(
-            select(Progress).where(Progress.user_id == user.id, Progress.direction == direction)
-        )
-    }
+    all_progress = db.scalars(select(Progress).where(Progress.user_id == user.id)).all()
+    learned_ids = {p.word_id for p in all_progress if p.learned}
+    progress = {p.word_id: p for p in all_progress if p.direction == direction}
 
-    def eligible(word):
-        p = progress.get(word.id)
-        if mode == "test":
-            return p is None or not p.learned
-        if mode == "new":
-            return p is None
-        if mode in ("hard", "mistakes"):
-            return (
-                p is not None
-                and p.incorrect > 0
-                and (mode == "mistakes" or p.incorrect >= p.correct)
-            )
-        if mode == "practice":
-            return p is not None and (p.next_review_at is None or p.next_review_at <= now())
-        return True
-
-    words = [word for word in words if eligible(word)]
+    words = [word for word in words if word.id not in learned_ids]
     random.shuffle(words)
     words.sort(
         key=lambda word: (
@@ -146,14 +164,14 @@ def _select_words(
             else 3
         )
     )
-    return words[:limit], db.scalars(select(Word)).all()
+    return words[:limit] if limit is not None else words, db.scalars(select(Word)).all()
 
 
 def _unique_candidates(words: list[Word], direction: str) -> list[Word]:
     seen_en, seen_ru = set(), set()
     result = []
     for word in words:
-        en = normalize(word.english)
+        en = normalize(display_english(word))
         ru = {normalize(x) for x in word.translations}
         if en in seen_en or ru & seen_ru:
             continue
@@ -172,8 +190,8 @@ def _big_match_pairs(words: list[Word]) -> list[tuple[Word, str]]:
                 normalize(value): value.strip() for value in word.translations if normalize(value)
             }.items()
         )
-        if translations and normalize(word.english):
-            candidates.append((word, normalize(word.english), translations))
+        if translations and normalize(display_english(word)):
+            candidates.append((word, normalize(display_english(word)), translations))
     chosen: list[tuple[Word, str, set[str], str, str]] = []
 
     def search(start: int) -> bool:
@@ -198,25 +216,6 @@ def _big_match_pairs(words: list[Word]) -> list[tuple[Word, str]]:
     if not search(0):
         return []
     return [(word, label) for word, _, _, _, label in chosen]
-
-
-def _can_ask_unambiguously(word: Word, library: list[Word], direction: str, kind: str) -> bool:
-    same_english = any(
-        other.id != word.id and normalize(other.english) == normalize(word.english)
-        for other in library
-    )
-    if kind == "listen":
-        # Audio contains only the English word, so it cannot identify a particular homonym.
-        return not same_english
-    if direction == "en-ru":
-        return not same_english or bool(word.example_en)
-    translations = {normalize(value) for value in word.translations}
-    same_russian = any(
-        other.id != word.id
-        and translations.intersection(normalize(value) for value in other.translations)
-        for other in library
-    )
-    return not same_russian or bool(word.example_ru)
 
 
 def create_practice(
@@ -248,40 +247,45 @@ def create_practice(
         db,
         user,
         pack_id,
-        mode,
         direction,
-        100000 if kind == "match" or mode == "test" else length * 4,
+        length * 4
+        if word_ids is not None and kind not in ("match", "listen") and mode != "test"
+        else None,
         word_ids,
     )
+    if kind == "listen":
+        selected = [word for word in selected if has_downloaded_audio(word)]
     selected_pairs = []
     if kind == "match":
         selected_pairs = _big_match_pairs(selected)
         random.shuffle(selected_pairs)
     else:
-        if mode != "test":
-            selected = [
-                word for word in selected if _can_ask_unambiguously(word, library, direction, kind)
-            ]
-        if mode != "test":
+        if word_ids is not None and mode != "test":
             selected = selected[:length]
-        if kind in ("choice", "listen") and (kind != "listen" or direction == "en-ru"):
-            selected = _unique_candidates(selected, direction)
     if kind == "match" and len(selected_pairs) < 8:
         raise HTTPException(
-            400, "Big Match needs 8 different words and translations. Try another pack or mode!"
+            400, "Big Match needs 8 different words and translations. Try another pack!"
         )
     if not selected:
         raise HTTPException(
             400,
-            "All words in this pack are learned"
-            if mode == "test"
-            else "No words are ready. Try another mode or pack",
+            (
+                "No words with downloaded audio are available in this pack"
+                if pack_id is not None
+                else "No words with downloaded audio are available"
+            )
+            if kind == "listen"
+            else (
+                "All words in this pack are learned"
+                if pack_id is not None
+                else "All words are learned"
+            ),
         )
     tasks = []
     if kind == "match":
         match_tokens = set()
         for word, display_translation in selected_pairs:
-            prompt = word.english
+            prompt = display_english(word)
             token = secrets.randbelow(10**9)
             while token in match_tokens:
                 token = secrets.randbelow(10**9)
@@ -297,13 +301,14 @@ def create_practice(
             )
     else:
         for word in selected:
-            prompt = word.english if direction == "en-ru" else word.translations[0]
-            accepted = word.translations if direction == "en-ru" else [word.english]
+            prompt = display_english(word) if direction == "en-ru" else word.translations[0]
+            accepted = word.translations if direction == "en-ru" else [display_english(word)]
             task = {
                 "word_id": word.id,
                 "prompt": prompt,
                 "accepted": accepted,
                 "english": word.english,
+                "answer_prefix": english_prefix(word) if direction == "ru-en" else "",
                 "picture": word.picture,
                 "ipa": word.ipa,
                 "audio": word.audio,
@@ -311,14 +316,16 @@ def create_practice(
             }
             if kind == "listen":
                 task["prompt"] = None
-                task["accepted"] = word.translations if direction == "en-ru" else [word.english]
+                task["accepted"] = (
+                    word.translations if direction == "en-ru" else [display_english(word)]
+                )
             if kind == "choice" or (kind == "listen" and direction == "en-ru"):
                 candidates = _unique_candidates(
                     [word] + random.sample(library, len(library)), direction
                 )
                 distractors = [w for w in candidates if w.id != word.id][:3]
                 options = [(word.id, accepted[0])] + [
-                    (w.id, w.translations[0] if direction == "en-ru" else w.english)
+                    (w.id, w.translations[0] if direction == "en-ru" else display_english(w))
                     for w in distractors
                 ]
                 random.shuffle(options)
@@ -400,6 +407,8 @@ def reveal_hint(db: Session, practice: PracticeSession, index: int, level: int):
         raise HTTPException(400, "Hint is not available")
     task = practice.tasks[index]
     answer = task["accepted"][0]
+    if task.get("answer_prefix") and answer.casefold().startswith(task["answer_prefix"]):
+        answer = answer[len(task["answer_prefix"]) :]
     if level == 1:
         if not task.get("hint_used"):
             tasks = list(practice.tasks)
@@ -454,8 +463,6 @@ def submit_answer(
         if not correct:
             return {"correct": False, "retry": True, "message": "Try again!"}
     elif practice.kind == "flashcard":
-        if rating is None:
-            raise HTTPException(400, "Pick how well you knew it")
         correct = rating != "again"
     elif practice.kind in ("choice", "listen") and task.get("options"):
         correct = any(
@@ -463,7 +470,7 @@ def submit_answer(
         )
     else:
         correct = (
-            exact_english(answer or "", task["english"])
+            exact_english(answer or "", task["accepted"][0])
             if practice.mode == "test"
             else check_text(answer or "", task["accepted"], settings)
         )
@@ -480,12 +487,12 @@ def submit_answer(
     results = list(practice.results)
     results.append(result)
     practice.results = results
-    if not assisted:
+    if not assisted and (practice.kind != "flashcard" or rating is not None):
         progress = update_progress(
             db, practice.user_id, task["word_id"], practice.direction, correct, rating
         )
         if practice.kind in ("type", "listen") and practice.direction == "ru-en":
-            exact = not task.get("hint_used") and exact_english(answer or "", task["english"])
+            exact = not task.get("hint_used") and exact_english(answer or "", task["accepted"][0])
             progress.typed_streak = progress.typed_streak + 1 if exact else 0
             if progress.typed_streak >= 2:
                 progress.learned = True

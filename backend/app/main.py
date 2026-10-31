@@ -174,7 +174,7 @@ def public_config(db: Session = Depends(get_db), user: User = Depends(current_us
     settings = db.get(AppSettings, 1)
     return {
         "accent": settings.accent,
-        "direction": settings.direction,
+        "direction": "ru-en",
         "session_length": settings.session_length,
         "allowed_exercises": settings.allowed_exercises,
         "child_avatar_change": settings.child_avatar_change,
@@ -513,7 +513,7 @@ def start_practice(body: SessionStart, db: Session = Depends(get_db), user: User
     if body.pack_id is not None:
         require_pack(db, body.pack_id)
     kind = body.kind or "choice"
-    direction = "en-ru" if kind == "match" else body.direction or settings.direction
+    direction = "en-ru" if kind == "match" else body.direction or "ru-en"
     practice = create_practice(
         db,
         user,
