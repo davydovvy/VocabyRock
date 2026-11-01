@@ -1,4 +1,6 @@
 import httpx
+from fastapi import HTTPException
+from sqlalchemy import select
 from datetime import timedelta
 
 from app import audio_jobs, wiktapi
@@ -11,6 +13,7 @@ def test_dictionary_lookup_prefers_us_and_saves_offline_audio(
     client, database, monkeypatch, tmp_path
 ):
     monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
+    monkeypatch.setattr(audio_jobs, "_rate_limit_streak", 0)
     audio_url = "https://upload.wikimedia.org/wikipedia/commons/a/ab/tree.mp3"
     requests = []
     audio_requests = []
@@ -93,7 +96,7 @@ def test_dictionary_lookup_prefers_us_and_saves_offline_audio(
             queued = db.get(Word, word["id"])
             assert queued.audio_status == "retrying"
             assert queued.audio_next_attempt_at > now()
-            assert db.get(Word, second["id"]).audio_next_attempt_at >= queued.audio_next_attempt_at
+            assert db.get(Word, second["id"]).audio_next_attempt_at <= queued.audio_next_attempt_at
             queued.audio_next_attempt_at = now() - timedelta(seconds=1)
             db.commit()
         assert not await audio_jobs.process_due(database)
@@ -125,6 +128,151 @@ def test_dictionary_lookup_prefers_us_and_saves_offline_audio(
 
 def test_us_accent_tags_include_california():
     assert wiktapi._priority(["California"]) < wiktapi._priority(["London"])
+
+
+def test_rate_limit_never_permanently_fails_audio(database, monkeypatch):
+    monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
+    monkeypatch.setattr(audio_jobs, "_rate_limit_streak", 0)
+    with database() as db:
+        word = Word(english="test audio", translations=["тест"])
+        audio_jobs.queue_audio(
+            word, "https://upload.wikimedia.org/wikipedia/commons/a/ab/test-audio.mp3"
+        )
+        db.add(word)
+        db.commit()
+        word_id = word.id
+
+    async def limited(_url):
+        raise wiktapi.AudioRateLimited(10)
+
+    monkeypatch.setattr(wiktapi, "save_audio", limited)
+
+    async def scenario():
+        for _ in range(audio_jobs.MAX_ATTEMPTS + 1):
+            monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
+            with database() as db:
+                saved = db.get(Word, word_id)
+                saved.audio_next_attempt_at = now() - timedelta(seconds=1)
+                db.commit()
+            assert await audio_jobs.process_due(database)
+        with database() as db:
+            saved = db.get(Word, word_id)
+            assert saved.audio_status == "retrying"
+            assert saved.audio_attempts == 0
+            assert saved.audio_error == audio_jobs.RATE_LIMIT_ERROR
+
+    run(scenario())
+
+
+def test_old_rate_limit_failures_are_restored(database, monkeypatch):
+    monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
+    with database() as db:
+        word = Word(
+            english="old failed audio",
+            translations=["старый"],
+            audio_source_url="https://upload.wikimedia.org/wikipedia/commons/a/ab/old.mp3",
+            audio_status="failed",
+            audio_attempts=8,
+            audio_error=audio_jobs.EXHAUSTED_RATE_LIMIT_ERROR,
+        )
+        db.add(word)
+        db.commit()
+        word_id = word.id
+    assert audio_jobs.recover_rate_limited_failures(database) == 1
+    assert audio_jobs.recover_rate_limited_failures(database) == 0
+    with database() as db:
+        saved = db.get(Word, word_id)
+        assert saved.audio_status == "retrying"
+        assert saved.audio_attempts == 0
+        assert saved.audio_next_attempt_at is not None
+
+
+def test_worker_restores_rate_limit_cooldown_after_restart(database, monkeypatch):
+    monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
+    due = now() + timedelta(minutes=5)
+    with database() as db:
+        db.add_all(
+            [
+                Word(
+                    english="limited",
+                    translations=["ограниченный"],
+                    audio_status="retrying",
+                    audio_source_url="https://upload.wikimedia.org/wikipedia/commons/a/ab/limited.mp3",
+                    audio_error=audio_jobs.RATE_LIMIT_ERROR,
+                    audio_next_attempt_at=due,
+                ),
+                Word(
+                    english="waiting",
+                    translations=["ожидающий"],
+                    audio_status="pending",
+                    audio_source_url="https://upload.wikimedia.org/wikipedia/commons/a/ab/waiting.mp3",
+                    audio_next_attempt_at=due,
+                ),
+            ]
+        )
+        db.commit()
+    assert audio_jobs.recover_rate_limited_failures(database) == 0
+    assert audio_jobs._cooldown_until == due
+    with database() as db:
+        waiting = db.scalar(select(Word).where(Word.english == "waiting"))
+        assert waiting.audio_error == audio_jobs.RATE_LIMIT_ERROR
+
+
+def test_lookup_keeps_pronunciations_with_their_meanings(client, monkeypatch):
+    verb_audio = "https://upload.wikimedia.org/wikipedia/commons/a/ab/live-verb.mp3"
+    adjective_audio = "https://upload.wikimedia.org/wikipedia/commons/a/ab/live-adjective.mp3"
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            json={
+                "word": "live",
+                "entries": [
+                    {
+                        "pos": "verb",
+                        "translations": [{"lang_code": "ru", "word": "жить", "sense": "to reside"}],
+                        "sounds": [
+                            {"ipa": "/lɪv/", "tags": ["US"]},
+                            {"mp3_url": verb_audio, "tags": ["US"]},
+                        ],
+                    },
+                    {
+                        "pos": "adjective",
+                        "translations": [
+                            {"lang_code": "ru", "word": "живой", "sense": "broadcast in real time"}
+                        ],
+                        "sounds": [
+                            {"ipa": "/laɪv/", "tags": ["US"]},
+                            {"mp3_url": adjective_audio, "tags": ["US"]},
+                        ],
+                    },
+                ],
+            },
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        wiktapi.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+
+    async def scenario():
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        result = (await client.get("/api/dictionary?word=live")).json()
+        assert [
+            (item["word"], item["ipa"], item["part_of_speech"], item["entry_index"])
+            for item in result["translations"]
+        ] == [
+            ("жить", "/lɪv/", "verb", 0),
+            ("живой", "/laɪv/", "adjective", 1),
+        ]
+        assert [(item["url"], item["entry_index"]) for item in result["audio"]] == [
+            (verb_audio, 0),
+            (adjective_audio, 1),
+        ]
+
+    run(scenario())
 
 
 def test_dictionary_lookup_resolves_case_insensitive_headwords(client, monkeypatch):
@@ -237,7 +385,7 @@ def test_failed_audio_can_be_requeued(client, database, monkeypatch):
     monkeypatch.setattr(audio_jobs, "_cooldown_until", None)
 
     async def limited(url):
-        raise wiktapi.AudioRateLimited(10)
+        raise HTTPException(502, "Could not download the pronunciation.")
 
     monkeypatch.setattr(wiktapi, "save_audio", limited)
 

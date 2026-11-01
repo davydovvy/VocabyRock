@@ -747,10 +747,14 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     {word.translations.join(' · ')}
                   </p>
                   {word.audio_status === 'pending' && (
-                    <p className="mt-2 text-xs font-bold text-violet">Audio queued for download</p>
+                    <p className="mt-2 text-xs font-bold text-violet">
+                      {word.audio_error || 'Audio queued for download'}
+                    </p>
                   )}
                   {word.audio_status === 'retrying' && (
-                    <p className="mt-2 text-xs font-bold text-violet">Audio retry scheduled</p>
+                    <p className="mt-2 text-xs font-bold text-violet">
+                      {word.audio_error || 'Audio retry scheduled'}
+                    </p>
                   )}
                   {word.audio_status === 'failed' && (
                     <p className="mt-2 text-xs font-bold text-coral break-words">
