@@ -27,11 +27,17 @@ export type WordInput = Omit<Word, 'id' | 'guid' | 'picture' | 'audio'> & {
 }
 export type DictionaryResult = {
   word: string
-  translations: { word: string; sense: string }[]
+  translations: {
+    word: string
+    sense: string
+    entry_index?: number
+    part_of_speech?: string
+    ipa?: string
+  }[]
   ipa: string
   part_of_speech: string
   us_spelling: string
-  audio: { url: string; label: string; tags: string[] }[]
+  audio: { url: string; label: string; tags: string[]; entry_index?: number }[]
 }
 export type Pack = {
   id: number

@@ -122,6 +122,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [dictionaryBusy, setDictionaryBusy] = useState(false)
   const [dictionaryError, setDictionaryError] = useState('')
   const [selectedAudio, setSelectedAudio] = useState('')
+  const [selectedDictionaryEntry, setSelectedDictionaryEntry] = useState<number | null>(null)
   const dictionaryRequest = useRef(0)
   const [showWordForm, setShowWordForm] = useState(false)
   const [savingWord, setSavingWord] = useState(false)
@@ -279,6 +280,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionaryError('')
     setDictionaryBusy(false)
     setSelectedAudio('')
+    setSelectedDictionaryEntry(null)
     setPictureChoice(null)
     setShowPictureSearch(false)
     setPixabayQuery(word?.english || '')
@@ -316,6 +318,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionaryError('')
     setDictionaryBusy(false)
     setSelectedAudio('')
+    setSelectedDictionaryEntry(null)
     setError('')
     if (pixabayQuery === wordForm.english) setPixabayQuery(value)
     setWordForm((current) => ({ ...current, english: value }))
@@ -327,22 +330,68 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionary(null)
     setDictionaryError('')
     setDictionaryBusy(true)
+    setSelectedDictionaryEntry(null)
     try {
       const result = await api<DictionaryResult>(`/dictionary?word=${encodeURIComponent(word)}`)
       if (dictionaryRequest.current !== requestId) return
       setDictionary(result)
+      const pronunciations = new Set(result.translations.map((item) => item.ipa).filter(Boolean))
+      const parts = new Set(result.translations.map((item) => item.part_of_speech).filter(Boolean))
       setWordForm((current) => ({
         ...current,
         english: result.word || current.english,
-        ipa: current.ipa || result.ipa,
+        ipa: current.ipa || (pronunciations.size > 1 ? '' : result.ipa),
         part_of_speech:
-          current.part_of_speech || (result.part_of_speech === 'noun' ? '' : result.part_of_speech),
+          current.part_of_speech ||
+          (parts.size > 1 || result.part_of_speech === 'noun' ? '' : result.part_of_speech),
       }))
     } catch (e) {
       if (dictionaryRequest.current === requestId) setDictionaryError((e as Error).message)
     } finally {
       if (dictionaryRequest.current === requestId) setDictionaryBusy(false)
     }
+  }
+  const chooseDictionaryTranslation = (item: DictionaryResult['translations'][number]) => {
+    const suggestion = item.word.toLowerCase()
+    const entryIndex = item.entry_index ?? 0
+    const values = translations
+      .split(';')
+      .map((value) => value.trim())
+      .filter(Boolean)
+    const selected = selectedDictionaryEntry === entryIndex && values.includes(suggestion)
+    if (selected) {
+      setTranslations(values.filter((value) => value !== suggestion).join('; '))
+      return
+    }
+    const switchingEntry =
+      selectedDictionaryEntry !== null && selectedDictionaryEntry !== entryIndex
+    setTranslations(
+      (switchingEntry
+        ? [suggestion]
+        : [...values.filter((value) => value !== suggestion), suggestion]
+      ).join('; '),
+    )
+    if (
+      switchingEntry ||
+      (selectedAudio &&
+        !dictionary?.audio.some(
+          (audio) => audio.url === selectedAudio && (audio.entry_index ?? 0) === entryIndex,
+        ))
+    )
+      setSelectedAudio('')
+    setSelectedDictionaryEntry(entryIndex)
+    setWordForm((current) => ({
+      ...current,
+      ipa: item.ipa === undefined ? current.ipa : item.ipa,
+      part_of_speech:
+        item.part_of_speech === 'noun'
+          ? ['singular countable', 'plural countable', 'uncountable'].includes(
+              current.part_of_speech || '',
+            )
+            ? current.part_of_speech
+            : ''
+          : item.part_of_speech || current.part_of_speech,
+    }))
   }
   const saveWord = async () => {
     if (savingWord || duplicateWord) return
@@ -514,6 +563,14 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     }, 'Progress reset')
   }
 
+  const dictionaryHasDifferentPronunciations =
+    new Set(dictionary?.translations.map((item) => item.ipa).filter(Boolean)).size > 1
+  const dictionaryAudio =
+    dictionary?.audio.filter((item) =>
+      selectedDictionaryEntry === null
+        ? !dictionaryHasDifferentPronunciations
+        : (item.entry_index ?? 0) === selectedDictionaryEntry,
+    ) || []
   const tabs: { key: Tab; label: string; icon: typeof BookOpen }[] = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
     { key: 'dashboard', label: 'Exercise dashboard', icon: LayoutDashboard },
@@ -1250,33 +1307,24 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     <div className="flex flex-wrap gap-2">
                       {dictionary.translations.map((item, index) => {
                         const suggestion = item.word.toLowerCase()
-                        const selected = translations
-                          .split(';')
-                          .map((s) => s.trim())
-                          .includes(suggestion)
+                        const entryIndex = item.entry_index ?? 0
+                        const selected =
+                          translations
+                            .split(';')
+                            .map((s) => s.trim())
+                            .includes(suggestion) && selectedDictionaryEntry === entryIndex
                         return (
                           <button
-                            key={`${item.word}-${item.sense}-${index}`}
+                            key={`${item.word}-${item.sense}-${entryIndex}-${index}`}
                             type="button"
                             aria-pressed={selected}
                             title={item.sense || undefined}
                             className="btn-soft"
-                            onClick={() =>
-                              setTranslations((current) => {
-                                const values = current
-                                  .split(';')
-                                  .map((s) => s.trim())
-                                  .filter(Boolean)
-                                return (
-                                  selected
-                                    ? values.filter((value) => value !== suggestion)
-                                    : [...values, suggestion]
-                                ).join('; ')
-                              })
-                            }
+                            onClick={() => chooseDictionaryTranslation(item)}
                           >
                             {item.word}
                             {item.sense ? ` · ${item.sense}` : ''}
+                            {item.ipa ? ` · ${item.ipa}` : ''}
                           </button>
                         )
                       })}
@@ -1285,7 +1333,12 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     <p>No Russian translations found. Enter one manually.</p>
                   )}
                   <p className="label mt-4">Pronunciation recordings</p>
-                  {dictionary.audio.length ? (
+                  {dictionaryHasDifferentPronunciations && selectedDictionaryEntry === null && (
+                    <p className="text-sm font-bold text-violet">
+                      Choose a meaning to see its pronunciation recordings.
+                    </p>
+                  )}
+                  {dictionaryAudio.length ? (
                     <>
                       <label className="flex items-center gap-3 py-1">
                         <input
@@ -1296,7 +1349,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                         />
                         <span>No recording</span>
                       </label>
-                      {dictionary.audio.map((item) => (
+                      {dictionaryAudio.map((item) => (
                         <label key={item.url} className="flex items-center gap-3 py-1">
                           <input
                             type="radio"

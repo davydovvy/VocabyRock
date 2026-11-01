@@ -170,13 +170,25 @@ async def lookup(word: str) -> dict:
 
     translations = []
     sounds = []
+    audio = []
+    seen_urls = set()
     part_of_speech = ""
     us_spelling = ""
-    for entry in entries:
+    for entry_index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         if not part_of_speech and isinstance(entry.get("pos"), str):
             part_of_speech = entry["pos"]
+        entry_sounds = [sound for sound in entry.get("sounds", []) if isinstance(sound, dict)]
+        ranked_sounds = sorted(entry_sounds, key=lambda sound: _priority(sound.get("tags") or []))
+        entry_ipa = next(
+            (
+                sound["ipa"]
+                for sound in ranked_sounds
+                if isinstance(sound.get("ipa"), str) and sound["ipa"]
+            ),
+            "",
+        )
         for form in entry.get("forms", []):
             if (
                 isinstance(form, dict)
@@ -192,12 +204,29 @@ async def lookup(word: str) -> dict:
                 continue
             value = item.get("word")
             if isinstance(value, str) and value.strip():
-                suggestion = {"word": value.strip(), "sense": item.get("sense") or ""}
+                suggestion = {
+                    "word": value.strip(),
+                    "sense": item.get("sense") or "",
+                    "entry_index": entry_index,
+                    "part_of_speech": entry.get("pos") or "",
+                    "ipa": entry_ipa,
+                }
                 if suggestion not in translations:
                     translations.append(suggestion)
-        for sound in entry.get("sounds", []):
-            if isinstance(sound, dict):
-                sounds.append(sound)
+        sounds.extend(entry_sounds)
+        for sound in ranked_sounds:
+            url = sound.get("mp3_url") or sound.get("ogg_url")
+            if not isinstance(url, str) or not _audio_url(url) or (entry_index, url) in seen_urls:
+                continue
+            seen_urls.add((entry_index, url))
+            audio.append(
+                {
+                    "url": url,
+                    "label": sound.get("audio") or "Pronunciation",
+                    "tags": sound.get("tags") or [],
+                    "entry_index": entry_index,
+                }
+            )
 
     ipa = next(
         (
@@ -207,20 +236,6 @@ async def lookup(word: str) -> dict:
         ),
         "",
     )
-    audio = []
-    seen_urls = set()
-    for sound in sorted(sounds, key=lambda s: _priority(s.get("tags") or [])):
-        url = sound.get("mp3_url") or sound.get("ogg_url")
-        if not isinstance(url, str) or not _audio_url(url) or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        audio.append(
-            {
-                "url": url,
-                "label": sound.get("audio") or "Pronunciation",
-                "tags": sound.get("tags") or [],
-            }
-        )
     return {
         "word": canonical_word,
         "translations": translations,

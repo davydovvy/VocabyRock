@@ -356,6 +356,43 @@ function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' | 'flashcard' 
             },
           ],
         })
+      if (path === '/dictionary?word=live')
+        return response({
+          word: 'live',
+          translations: [
+            {
+              word: 'жить',
+              sense: 'to reside',
+              entry_index: 0,
+              part_of_speech: 'verb',
+              ipa: '/lɪv/',
+            },
+            {
+              word: 'живой',
+              sense: 'broadcast in real time',
+              entry_index: 1,
+              part_of_speech: 'adjective',
+              ipa: '/laɪv/',
+            },
+          ],
+          ipa: '/lɪv/',
+          part_of_speech: 'verb',
+          us_spelling: '',
+          audio: [
+            {
+              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/live-verb.mp3',
+              label: 'Verb',
+              tags: ['US'],
+              entry_index: 0,
+            },
+            {
+              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/live-adjective.mp3',
+              label: 'Adjective',
+              tags: ['US'],
+              entry_index: 1,
+            },
+          ],
+        })
       if (path === '/dictionary?word=january')
         return response({
           word: 'January',
@@ -1013,6 +1050,44 @@ describe('critical child and parent interactions', () => {
       (savedWords[0] as (typeof savedWords)[number] & { audio_url: string }).audio_url,
     ).toContain('upload.wikimedia.org')
     expect(await screen.findByText('Audio queued for download')).toBeTruthy()
+  })
+
+  it('uses the pronunciation and recording for the selected meaning', async () => {
+    mockApi()
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
+    await user.click(screen.getByRole('button', { name: 'Add Word' }))
+    await user.type(screen.getByLabelText('English'), 'live')
+    await user.click(screen.getByRole('button', { name: 'Fill from Wikimedia' }))
+    await screen.findByRole('button', { name: /живой/ })
+    expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('Choose a meaning to see its pronunciation recordings.')).toBeTruthy()
+    expect(screen.queryByRole('radio', { name: /US/ })).toBeNull()
+    await user.click(screen.getByRole('button', { name: /живой/ }))
+    expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/laɪv/')
+    expect(
+      (screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement).value,
+    ).toBe('adjective')
+    expect(screen.getByRole('radio', { name: /US/ })).toBeTruthy()
+    expect(screen.queryByRole('audio', { name: 'Preview Verb' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: /жить/ }))
+    expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/lɪv/')
+    expect(
+      (screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement).value,
+    ).toBe('verb')
+    expect(
+      (screen.getByLabelText('Russian translations (separate with ;)') as HTMLInputElement).value,
+    ).toBe('жить')
+    await user.click(screen.getByRole('radio', { name: /US/ }))
+    await user.click(screen.getByRole('button', { name: 'Save Word' }))
+    await waitFor(() => expect(savedWords).toHaveLength(1))
+    expect(savedWords[0].ipa).toBe('/lɪv/')
+    expect(savedWords[0].part_of_speech).toBe('verb')
+    expect(savedWords[0].translations).toEqual(['жить'])
   })
 
   it('replaces the typed case with the Wikimedia headword when filling a word', async () => {
