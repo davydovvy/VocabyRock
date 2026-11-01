@@ -36,6 +36,14 @@ def test_pack_printouts_include_pictures_and_hide_test_answers(client, database)
         db.add(apple)
         db.flush()
         db.add(PackWord(pack_id=pack.id, word_id=apple.id, position=11))
+        swim = Word(
+            english="swim",
+            translations=["плавать"],
+            part_of_speech="verb",
+        )
+        db.add(swim)
+        db.flush()
+        db.add(PackWord(pack_id=pack.id, word_id=swim.id, position=12))
         db.commit()
         pack_id = pack.id
 
@@ -67,10 +75,16 @@ def test_pack_printouts_include_pictures_and_hide_test_answers(client, database)
         assert "monkey" in reference_text
         assert "a monkey" in reference_text
         assert "an apple" in reference_text
+        assert "to swim" in reference_text
         assert "кошка" in test_text
         assert "обезьяна" in test_text
+        assert "плавать" in test_text
+        assert re.search(r"(?m)^a$", test_text)
+        assert re.search(r"(?m)^an$", test_text)
+        assert re.search(r"(?m)^to$", test_text)
         assert "cat" not in test_text
         assert "monkey" not in test_text
+        assert "swim" not in test_text
         assert "/kæt/" not in test_text
         assert "Animals" not in test_text
         for reader in (reference_reader, test_reader):

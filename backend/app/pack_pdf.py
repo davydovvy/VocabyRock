@@ -11,7 +11,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 from .config import get_settings
-from .learning import display_english
+from .learning import display_english, english_prefix
 from .models import Pack, Word
 
 FONT_DIR = Path(__file__).parent / "assets" / "fonts"
@@ -183,8 +183,14 @@ def _draw_test(
     pdf.setFont("PackSans-Bold", TEST_SIZE)
     for index, line in enumerate(russian):
         pdf.drawString(text_x, top - 15 - inset - index * 15, line)
+    answer_y = top - height + 16 + inset
+    prefix = english_prefix(word).strip()
+    answer_x = text_x
+    if prefix:
+        pdf.drawString(text_x, answer_y + 3, prefix)
+        answer_x += pdfmetrics.stringWidth(prefix, "PackSans-Bold", TEST_SIZE) + 7
     pdf.setStrokeColorRGB(*MUTED)
-    pdf.line(text_x, top - height + 16 + inset, x + width - 5, top - height + 16 + inset)
+    pdf.line(answer_x, answer_y, x + width - 5, answer_y)
     pdf.setStrokeColorRGB(*RULE)
     pdf.line(x, top - height + 2, x + width, top - height + 2)
 
