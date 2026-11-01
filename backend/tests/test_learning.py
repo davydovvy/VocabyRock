@@ -285,7 +285,7 @@ def test_practice_saves_progress_and_rewards(database):
         assert len(db.scalars(select(Progress).where(Progress.user_id == child.id)).all()) == 3
 
 
-def test_big_match_scores_first_check_and_requires_corrections(client):
+def test_big_match_scores_first_check_and_requires_corrections(client, database):
     async def scenario():
         profiles = (await client.get("/api/profiles")).json()
         child = next(profile for profile in profiles if profile["role"] == "child")
@@ -355,6 +355,11 @@ def test_big_match_scores_first_check_and_requires_corrections(client):
         stats_after = (await client.get("/api/stats")).json()
         assert stats_after["user"]["xp"] == stats_before["user"]["xp"]
         assert stats_after["user"]["stars"] == stats_before["user"]["stars"]
+        with database() as db:
+            history = db.get(PracticeSession, session["id"]).attempt_history
+            assert len(history) == 10
+            assert sum(not attempt["correct"] for attempt in history) == 2
+            assert all(attempt["correct"] for attempt in history[-2:])
 
     run(scenario())
 

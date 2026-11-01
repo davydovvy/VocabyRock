@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .models import AppSettings, PackWord, PracticeSession, Progress, User, Word, now
+from .models import AppSettings, Pack, PackWord, PracticeSession, Progress, User, Word, now
 
 
 def normalize(value: str, fold_yo: bool = True) -> str:
@@ -342,6 +342,8 @@ def create_practice(
         direction=direction,
         tasks=tasks,
         results=[],
+        attempt_history=[],
+        pack_name=db.get(Pack, pack_id).name if pack_id is not None else None,
     )
     db.add(practice)
     db.commit()
@@ -483,10 +485,21 @@ def submit_answer(
         "correct": correct,
         "answer": task.get("answer") or task.get("accepted", []),
         "word_id": task["word_id"],
+        "chosen": (
+            next((o["text"] for o in task["options"] if o["token"] == option_id), "")
+            if task.get("options")
+            else rating
+            if practice.kind == "flashcard"
+            else answer or ""
+        ),
+        "answered_at": now().isoformat() + "Z",
+        "assisted": assisted,
+        "hint_used": bool(task.get("hint_used") or task.get("full_hint_used")),
     }
     results = list(practice.results)
     results.append(result)
     practice.results = results
+    practice.attempt_history = [*(practice.attempt_history or []), result]
     if not assisted and (practice.kind != "flashcard" or rating is not None):
         progress = update_progress(
             db, practice.user_id, task["word_id"], practice.direction, correct, rating
@@ -528,6 +541,7 @@ def submit_all_pairs(db: Session, practice: PracticeSession, pairs: list[tuple[i
     options = {task["token"]: task["answer"] for task in practice.tasks}
     chosen = dict(pairs)
     if is_big_match and practice.results:
+        previous_tasks = practice.tasks
         if any(
             task.get("locked") and chosen[index] != task["token"]
             for index, task in enumerate(practice.tasks)
@@ -542,6 +556,22 @@ def submit_all_pairs(db: Session, practice: PracticeSession, pairs: list[tuple[i
             for index, task in enumerate(practice.tasks)
         ]
         practice.tasks = tasks
+        checked_at = now().isoformat() + "Z"
+        practice.attempt_history = [
+            *(practice.attempt_history or []),
+            *(
+                {
+                    "index": index,
+                    "word_id": task["word_id"],
+                    "correct": chosen[index] == task["token"],
+                    "chosen": options[chosen[index]],
+                    "answer": task["answer"],
+                    "answered_at": checked_at,
+                }
+                for index, task in enumerate(previous_tasks)
+                if not task.get("locked")
+            ),
+        ]
         if all(task["locked"] for task in tasks):
             practice.finished_at = now()
         db.commit()
@@ -553,6 +583,7 @@ def submit_all_pairs(db: Session, practice: PracticeSession, pairs: list[tuple[i
             "answer": task["answer"],
             "chosen": options[chosen[index]],
             "word_id": task["word_id"],
+            "answered_at": now().isoformat() + "Z",
         }
         for index, task in enumerate(practice.tasks)
     ]
@@ -561,6 +592,7 @@ def submit_all_pairs(db: Session, practice: PracticeSession, pairs: list[tuple[i
             db, practice.user_id, result["word_id"], practice.direction, result["correct"]
         )
     practice.results = results
+    practice.attempt_history = [*(practice.attempt_history or []), *results]
     if is_big_match:
         practice.tasks = [
             dict(task, last_token=chosen[index], locked=results[index]["correct"])

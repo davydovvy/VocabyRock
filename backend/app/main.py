@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager, suppress
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +11,7 @@ from sqlalchemy import String, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from . import audio_jobs, library_archive, pack_pdf, pixabay, wiktapi
 from .auth import (
     child,
     clear_failed_logins,
@@ -21,13 +23,12 @@ from .auth import (
     record_failed_login,
     verify_password,
 )
-from . import audio_jobs, library_archive, pixabay, wiktapi
-from . import pack_pdf
 from .config import get_settings
 from .db import get_db
 from .learning import create_practice, public_session, reveal_hint, submit_all_pairs, submit_answer
 from .media import remove_picture, save_picture, save_picture_data
 from .models import AppSettings, Pack, PackWord, PracticeSession, Progress, User, Word, now
+from .practice_report import report as practice_report
 from .schemas import (
     AnswerInput,
     HintInput,
@@ -525,6 +526,22 @@ def start_practice(body: SessionStart, db: Session = Depends(get_db), user: User
         body.word_ids,
     )
     return public_session(practice)
+
+
+@app.get("/api/parent/practice-report")
+def get_practice_report(
+    start: date | None = None,
+    end: date | None = None,
+    tz: str = "UTC",
+    child_id: int | None = None,
+    kind: str | None = None,
+    page: int = 1,
+    db: Session = Depends(get_db),
+    _: User = Depends(parent),
+):
+    last_day = end or date.today()
+    first_day = start or last_day - timedelta(days=6)
+    return practice_report(db, first_day, last_day, tz, child_id, kind, page)
 
 
 def owned_session(db: Session, session_id: int, user: User):

@@ -154,6 +154,54 @@ function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' | 'flashcard' 
       if (path === '/library/archive' && options?.method === 'POST')
         return response({ words: 31, packs: 4 })
       if (path === '/packs') return response(packs)
+      if (path.startsWith('/parent/practice-report?')) {
+        const page = Number(new URL(path, 'http://localhost').searchParams.get('page') || '1')
+        return response({
+          summary: { started: 21, completed: 1, attempts: 1, correct: 0 },
+          packs: [{ date: '2026-11-01', pack: 'Animals', started: 21, completed: 1 }],
+          difficult_words: [{ word_id: 1, word: 'cat', attempts: 1, correct: 0, incorrect: 1 }],
+          pagination: { page, page_size: 20, total_sessions: 21, total_pages: 2 },
+          sessions: [
+            {
+              id: 42,
+              child: 'Explorer One',
+              pack: 'Animals',
+              kind: 'type',
+              mode: 'quick',
+              direction: 'ru-en',
+              started_at: '2026-11-01T08:00:00Z',
+              finished_at: null,
+              question_count: 2,
+              answered_count: 1,
+              correct_count: 0,
+              attempts: [
+                {
+                  index: 0,
+                  word: 'cat',
+                  prompt: 'кошка',
+                  correct: false,
+                  chosen: 'dog',
+                  answer: 'cat',
+                  answered_at: '2026-11-01T08:01:00Z',
+                  assisted: false,
+                  hint_used: false,
+                },
+                {
+                  index: 1,
+                  word: 'dog',
+                  prompt: 'собака',
+                  correct: null,
+                  chosen: null,
+                  answer: 'dog',
+                  answered_at: null,
+                  assisted: false,
+                  hint_used: false,
+                },
+              ],
+            },
+          ],
+        })
+      }
       if (path === '/stats') return response(stats)
       if (path.startsWith('/stats?')) return response(stats)
       if (path.startsWith('/progress?')) {
@@ -628,6 +676,37 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await waitFor(() => expect(screen.getByText('Welcome, Parent')).toBeTruthy())
     expect(requests).toContain('POST /auth/parent')
+  })
+
+  it('shows exercise history and applies parent dashboard filters', async () => {
+    mockApi()
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Exercise dashboard' }))
+    expect(await screen.findByText('Most difficult words')).toBeTruthy()
+    expect(screen.getByText('Unfinished')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /Explorer One · Animals · type/ }))
+    expect(screen.getByText(/кошка → dog/)).toBeTruthy()
+    expect(screen.getByText('Not answered')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(await screen.findByText('Page 2 of 2')).toBeTruthy()
+    expect(requests.some((request) => request.includes('page=2'))).toBe(true)
+    await user.selectOptions(screen.getByLabelText('Child filter'), '2')
+    await user.selectOptions(screen.getByLabelText('Exercise filter'), 'type')
+    await waitFor(() =>
+      expect(
+        requests.some(
+          (request) =>
+            request.includes('/parent/practice-report?') &&
+            request.includes('child_id=2') &&
+            request.includes('kind=type') &&
+            request.includes('page=1'),
+        ),
+      ).toBe(true),
+    )
   })
 
   it('edits each child learned checkbox in vocabulary and pack word lists', async () => {

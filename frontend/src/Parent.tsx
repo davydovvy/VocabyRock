@@ -33,8 +33,9 @@ import {
 } from './api'
 import { animal, Avatar, Empty, packArt, ProgressBar, Shell } from './ui'
 import { displayEnglish } from './wordDisplay'
+import PracticeDashboard from './PracticeDashboard'
 
-type Tab = 'overview' | 'words' | 'packs' | 'import' | 'progress' | 'settings'
+type Tab = 'overview' | 'dashboard' | 'words' | 'packs' | 'import' | 'progress' | 'settings'
 const blankWord: WordInput = {
   english: '',
   translations: [],
@@ -515,6 +516,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
 
   const tabs: { key: Tab; label: string; icon: typeof BookOpen }[] = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { key: 'dashboard', label: 'Exercise dashboard', icon: LayoutDashboard },
     { key: 'words', label: 'Vocabulary', icon: BookOpen },
     { key: 'packs', label: 'Word Packs', icon: BookOpen },
     { key: 'import', label: 'Import / Export', icon: Upload },
@@ -625,6 +627,9 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             </div>
           </div>
         </>
+      )}
+      {tab === 'dashboard' && (
+        <PracticeDashboard children={profiles.filter((profile) => profile.role === 'child')} />
       )}
       {tab === 'words' && (
         <>

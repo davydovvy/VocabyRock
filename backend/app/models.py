@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -101,6 +111,7 @@ class Progress(Base):
 
 class PracticeSession(Base):
     __tablename__ = "practice_sessions"
+    __table_args__ = (Index("ix_practice_sessions_started_at", "started_at"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     pack_id: Mapped[int | None] = mapped_column(
@@ -111,6 +122,8 @@ class PracticeSession(Base):
     direction: Mapped[str] = mapped_column(String(8))
     tasks: Mapped[list] = mapped_column(JSON)
     results: Mapped[list] = mapped_column(JSON, default=list)
+    attempt_history: Mapped[list] = mapped_column(JSON, default=list)
+    pack_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
