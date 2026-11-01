@@ -82,6 +82,8 @@ BASE_URL=http://127.0.0.1:8787 ADMIN_PASSWORD=your-password npm run test:e2e
 
 It selects a child, plays through a pack, checks the result, signs in as the parent, adds a word, and finds it in the child's library. Set `CHROMIUM_PATH` if Chromium is installed elsewhere.
 
+With Playwright WebKit installed, `cd frontend && BASE_URL=http://127.0.0.1:8787 npm run test:e2e:ipad` checks the answer field and Latin/Cyrillic editing with an iPad Pro 11 browser profile. This is a WebKit simulation; checking the predictive text bar itself requires Safari on a physical iPad.
+
 ## Parent workflow
 
 Choose the locked Parent avatar and enter `ADMIN_PASSWORD`. In **Settings → Children**, change a child's name beside their avatar and click **Save**. Add words to the library with one or more Russian translations and optional IPA. **Part of speech** starts blank and offers singular countable, plural countable, and uncountable nouns separately, along with verbs and other parts of speech. A singular countable noun displays `a` or `an` according to the first sound in its IPA transcription: `a university` and `an hour`, for example. Without IPA it displays no article until a transcription is added. Verbs display `to`. These prefixes appear in vocabulary lists, pack lists, printable word sheets, study questions, and English answer choices; the stored English spelling remains unchanged. Existing words labeled only `noun` keep their spelling until you classify them.
@@ -131,6 +133,8 @@ In **Word Packs**, the parent can download two A4 PDFs for any pack. **Word shee
 Children can choose **Study** on a pack and then pick Big Match, Flip Cards, Pick the Word, Type It, or Listen. Each game except Big Match includes every unlearned word in the pack; Listen includes only those with a downloaded recording. The default direction is Russian to English, and children can switch direction before starting a game. **Test** asks for the English spelling of every unlearned word in the pack, uses keyboard entry, and offers no hints.
 
 When typing a singular countable noun with IPA in Russian-to-English practice, the required `a` or `an` appears beside the input and cannot be edited. Verbs similarly show a fixed `to`. The child types only the word itself. A child learns a word after typing its English spelling correctly twice in a row without hints. A wrong spelling resets that word's streak. Case and extra spaces do not matter, but the optional typo tolerance does not count toward learning. Choices and matching provide practice without marking words learned; flipping cards also leaves learning progress unchanged.
+
+Typed answers in Type It, Listen, and pack tests request browser autocomplete, autocorrection, automatic capitalization, and spell checking to be off. The answer field remains a standard text input for Latin and Cyrillic typing and normal editing. On iPadOS, predictive text may still appear; web input attributes alone cannot guarantee complete suppression of keyboard suggestions. Parent administration fields retain their usual keyboard behavior.
 
 A pack is learned once at least 90% of its words are learned. The parent can set American or British speech, exercise availability, handling of Russian `е`/`ё`, optional one letter typo tolerance, and avatar choice. These settings persist in SQLite.
 

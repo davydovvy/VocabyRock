@@ -64,7 +64,7 @@ let requests: string[] = []
 let submittedAnswers: string[] = []
 let startedPractices: { mode: string; kind: string; direction: string; pack_id: number | null }[] =
   []
-let practiceKind: 'choice' | 'type' | 'match' | 'flashcard' = 'choice'
+let practiceKind: 'choice' | 'type' | 'match' | 'flashcard' | 'listen' = 'choice'
 let practiceDirection: 'en-ru' | 'ru-en' = 'en-ru'
 let fullHintUsed = false
 let firstMatchResults:
@@ -92,7 +92,20 @@ function response(value: unknown, status = 200) {
     headers: { 'Content-Type': 'application/json' },
   })
 }
-function mockApi(taskCount = 1, kind: 'choice' | 'type' | 'match' | 'flashcard' = 'choice') {
+function unassistedAnswerInput() {
+  const input = screen.getByRole('textbox', { name: 'Your answer' }) as HTMLInputElement
+  expect(input.type).toBe('text')
+  expect(input.getAttribute('autocomplete')).toBe('off')
+  expect(input.getAttribute('autocorrect')).toBe('off')
+  expect(input.getAttribute('autocapitalize')).toBe('none')
+  expect(input.getAttribute('spellcheck')).toBe('false')
+  expect(input.hasAttribute('inputmode')).toBe(false)
+  return input
+}
+function mockApi(
+  taskCount = 1,
+  kind: 'choice' | 'type' | 'match' | 'flashcard' | 'listen' = 'choice',
+) {
   loggedIn = null
   answeredIndices = []
   practiceKind = kind
@@ -656,6 +669,38 @@ describe('critical child and parent interactions', () => {
     expect(screen.queryByText('M----y')).toBeNull()
   })
 
+  it('keeps Russian typing editable while requesting no keyboard assistance', async () => {
+    mockApi(1, 'type')
+    practiceTasks = [{ prompt: 'cat' }]
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    await user.click(await screen.findByRole('button', { name: 'English → Russian' }))
+    await user.click(screen.getByRole('button', { name: 'Type It' }))
+    const input = unassistedAnswerInput()
+    await user.type(input, 'кошк')
+    await user.type(input, 'а')
+    expect(input.value).toBe('кошка')
+    await user.click(screen.getByRole('button', { name: 'Check' }))
+    expect(submittedAnswers).toEqual(['кошка'])
+  })
+
+  it('uses the same unassisted text input for typed listening answers', async () => {
+    mockApi(1, 'listen')
+    practiceTasks = [{ prompt: 'Audio question' }]
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Explorer One/ }))
+    await user.click(screen.getAllByRole('button', { name: /Study/ })[1])
+    await user.click(await screen.findByRole('button', { name: 'Listen' }))
+    const input = unassistedAnswerInput()
+    await user.type(input, 'cat')
+    expect(input.value).toBe('cat')
+    await user.click(screen.getByRole('button', { name: 'Check' }))
+    expect(submittedAnswers).toEqual(['cat'])
+  })
+
   it('offers one Big Match and scores only after eight placements', async () => {
     mockApi(8, 'match')
     const user = userEvent.setup()
@@ -1030,6 +1075,13 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Sign in' }))
     await user.click(await screen.findByRole('button', { name: 'Vocabulary' }))
     await user.click(screen.getByRole('button', { name: 'Add Word' }))
+    for (const label of ['English', 'Russian translations (separate with ;)']) {
+      const field = screen.getByLabelText(label)
+      expect(field.getAttribute('autocomplete')).toBeNull()
+      expect(field.getAttribute('autocorrect')).toBeNull()
+      expect(field.getAttribute('autocapitalize')).toBeNull()
+      expect(field.getAttribute('spellcheck')).toBeNull()
+    }
     await user.type(screen.getByLabelText('English'), 'tree')
     await new Promise((resolve) => setTimeout(resolve, 700))
     expect(requests.filter((request) => request.startsWith('GET /dictionary'))).toEqual([])

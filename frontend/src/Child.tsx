@@ -1070,10 +1070,15 @@ function Game({
                       </span>
                     )}
                     <input
+                      type="text"
                       autoFocus={
                         typeof window.matchMedia !== 'function' ||
                         !window.matchMedia('(pointer: coarse)').matches
                       }
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
                       className={`field min-w-0 flex-1 text-xl ${task.answer_prefix ? 'rounded-l-none' : ''}`}
                       value={typed}
                       onChange={(e) => setTyped(e.target.value)}
