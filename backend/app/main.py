@@ -46,13 +46,18 @@ from .schemas import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    worker = asyncio.create_task(audio_jobs.run_worker())
+    worker = (
+        asyncio.create_task(audio_jobs.run_worker())
+        if get_settings().audio_downloads_enabled
+        else None
+    )
     try:
         yield
     finally:
-        worker.cancel()
-        with suppress(asyncio.CancelledError):
-            await worker
+        if worker is not None:
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
 
 
 app = FastAPI(

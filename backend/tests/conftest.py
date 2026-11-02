@@ -19,6 +19,8 @@ from app.seed import seed  # noqa: E402
 def database(tmp_path, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "test-parent-password")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AUDIO_DOWNLOADS_ENABLED", "true")
+    monkeypatch.setenv("PIXABAY_API_KEY", "")
     get_settings.cache_clear()
     engine = make_engine(f"sqlite:///{tmp_path / 'test.sqlite3'}")
     Base.metadata.create_all(engine)

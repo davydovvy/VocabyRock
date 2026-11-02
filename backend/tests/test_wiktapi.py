@@ -1,12 +1,51 @@
+import asyncio
+
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 from datetime import timedelta
 
 from app import audio_jobs, wiktapi
+from app.config import get_settings
+from app.main import app
 from app.models import Word, now
 
 from .conftest import run
+
+
+def test_disabled_audio_downloads_leave_queue_untouched(database, monkeypatch):
+    url = "https://upload.wikimedia.org/wikipedia/commons/a/ab/tree.mp3"
+    with database() as db:
+        word = Word(english="tree", translations=["дерево"])
+        audio_jobs.queue_audio(word, url)
+        db.add(word)
+        db.commit()
+        word_id = word.id
+
+    monkeypatch.setenv("AUDIO_DOWNLOADS_ENABLED", "false")
+    get_settings.cache_clear()
+
+    async def fail_if_downloaded(_url):
+        raise AssertionError("Audio download should be disabled")
+
+    monkeypatch.setattr(wiktapi, "save_audio", fail_if_downloaded)
+    assert not run(audio_jobs.process_due(database))
+
+    async def fail_if_started():
+        raise AssertionError("Audio worker should be disabled")
+
+    monkeypatch.setattr(audio_jobs, "run_worker", fail_if_started)
+
+    async def check_lifespan():
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+
+    run(check_lifespan())
+    with database() as db:
+        queued = db.get(Word, word_id)
+        assert queued.audio_status == "pending"
+        assert queued.audio_attempts == 0
+        assert queued.audio_next_attempt_at is not None
 
 
 def test_dictionary_lookup_prefers_us_and_saves_offline_audio(

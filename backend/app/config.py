@@ -5,7 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[2] / ".env", extra="ignore"
+    )
 
     admin_password: str = "change-me"
     data_dir: Path = Path("./data")
@@ -13,6 +15,7 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_days: int = 30
     pixabay_api_key: str = ""
+    audio_downloads_enabled: bool = False
 
     @property
     def database_url(self) -> str:

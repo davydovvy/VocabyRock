@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from . import wiktapi
+from .config import get_settings
 from .db import SessionLocal
 from .models import Word, now
 
@@ -32,6 +33,8 @@ def queue_audio(word: Word, url: str) -> None:
 async def process_due(session_factory=SessionLocal) -> bool:
     """Process at most one due word, allowing one downloader request at a time."""
     global _cooldown_until, _rate_limit_streak
+    if not get_settings().audio_downloads_enabled:
+        return False
     current = now()
     if _cooldown_until and current < _cooldown_until:
         return False
