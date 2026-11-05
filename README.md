@@ -139,6 +139,8 @@ For API clients, parent authentication is required for `GET /api/parent/practice
 
 In **Word Packs**, the parent can download two A4 PDFs for any pack. **Word sheet** fits pictures, English words, transcriptions, and Russian translations into compact columns. **Writing test** shows each picture and Russian translation with a line for the child to write the English word. For words marked as singular countable nouns or verbs, the word sheet includes `a`/`an` or `to`, and the writing test prints that prefix before the answer line. The `a`/`an` choice uses the saved transcription. Both PDFs include every word in the pack and use the pack's current order. If a word has no saved picture, its image space is left blank.
 
+For generated pronunciations, use **Audio JSON** on a pack to export its word GUIDs and saved IPA. Follow [the Kokoro guide](scripts/README-kokoro.md) to make three `af_heart` WAV takes per word, choose one take for each word, then use **Upload audio** on the same pack. A new upload replaces that word's recording, and WAV recordings are included in vocabulary archives.
+
 ## Learning and settings
 
 Children can choose **Study** on a pack and then pick Big Match, Flip Cards, Pick the Word, Type It, or Listen. Each game except Big Match includes every unlearned word in the pack; Listen includes only those with a downloaded recording. The default direction is Russian to English, and children can switch direction before starting a game. **Test** asks for the English spelling of every unlearned word in the pack, uses keyboard entry, and offers no hints.

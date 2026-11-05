@@ -135,6 +135,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [chosenWord, setChosenWord] = useState<number | ''>('')
   const [archiveFile, setArchiveFile] = useState<File | null>(null)
   const [archiveInfo, setArchiveInfo] = useState<{ words: number; packs: number } | null>(null)
+  const [audioUploadPackId, setAudioUploadPackId] = useState<number | null>(null)
   const [stats, setStats] = useState<Record<number, Stats>>({})
   const [progressRows, setProgressRows] = useState<Record<number, ProgressRow[]>>({})
   const [progressLoaded, setProgressLoaded] = useState(false)
@@ -252,6 +253,12 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const printPack = (pack: Pack, variant: 'reference' | 'test') => {
     const filename = `pack-${pack.id}-${variant === 'reference' ? 'words' : 'writing-test'}.pdf`
     void run(() => download(`/packs/${pack.id}/print/${variant}`, filename), 'PDF downloaded')
+  }
+  const exportPackAudio = (pack: Pack) => {
+    void run(
+      () => download(`/packs/${pack.id}/audio-generation`, `pack-${pack.guid}-audio.json`),
+      'Audio generation JSON downloaded',
+    )
   }
   const filteredWords = useMemo(
     () =>
@@ -498,6 +505,34 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     const form = new FormData()
     form.append('file', file)
     await run(() => api(`/packs/${id}/cover`, { method: 'POST', body: form }), 'Picture saved')
+  }
+  const uploadPackAudio = async (pack: Pack, files: FileList) => {
+    if (!files.length) return
+    const form = new FormData()
+    for (const file of Array.from(files)) form.append('files', file)
+    setError('')
+    setNotice('')
+    setAudioUploadPackId(pack.id)
+    try {
+      const result = await api<{ imported: number; duplicates: number }>(
+        `/packs/${pack.id}/audio`,
+        {
+          method: 'POST',
+          body: form,
+        },
+      )
+      await refresh()
+      setNotice(
+        `${result.imported} pronunciation${result.imported === 1 ? '' : 's'} saved` +
+          (result.duplicates
+            ? `; ${result.duplicates} extra take${result.duplicates === 1 ? '' : 's'} skipped`
+            : ''),
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setAudioUploadPackId(null)
+    }
   }
   const searchPixabay = async (query: string) => {
     const searchId = ++pixabaySearchId.current
@@ -838,6 +873,24 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     <button className="btn-soft" onClick={() => printPack(pack, 'test')}>
                       <Download size={18} /> Writing test
                     </button>
+                    <button className="btn-soft" onClick={() => exportPackAudio(pack)}>
+                      <Download size={18} /> Audio JSON
+                    </button>
+                    <label className="btn-soft" aria-label={`Upload audio for ${pack.name}`}>
+                      <Upload size={18} />{' '}
+                      {audioUploadPackId === pack.id ? 'Uploading…' : 'Upload audio'}
+                      <input
+                        type="file"
+                        className="sr-only"
+                        accept=".wav,audio/wav"
+                        multiple
+                        disabled={audioUploadPackId !== null}
+                        onChange={(e) => {
+                          if (e.target.files?.length) void uploadPackAudio(pack, e.target.files)
+                          e.target.value = ''
+                        }}
+                      />
+                    </label>
                     <label className="btn-soft" aria-label={`Upload cover for ${pack.name}`}>
                       <ImagePlus size={19} />
                       <input

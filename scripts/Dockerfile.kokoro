@@ -1,0 +1,24 @@
+# Build with context ./scripts. Python stays inside this one-off image.
+FROM python:3.12-slim-bookworm
+
+ARG TORCH_BACKEND=cu128
+RUN case "$TORCH_BACKEND" in cu126|cu128|rocm6.3) ;; \
+      *) echo "Unsupported TORCH_BACKEND: $TORCH_BACKEND" >&2; exit 1 ;; \
+    esac
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      espeak-ng libsndfile1 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir torch==2.7.1 \
+      --index-url "https://download.pytorch.org/whl/${TORCH_BACKEND}" \
+    && python -m pip install --no-cache-dir kokoro==0.9.4 soundfile \
+    && python -c "import kokoro, soundfile, torch; print('PyTorch', torch.__version__)"
+
+# KPipeline initializes English G2P even when raw IPA phonemes are supplied.
+RUN python -m spacy download en_core_web_sm
+
+WORKDIR /app
+COPY kokoro_words.py kokoro_lesson2.json ./
+ENV HF_HOME=/cache PYTHONUNBUFFERED=1
+ENTRYPOINT ["python", "/app/kokoro_words.py", "--output", "/output"]

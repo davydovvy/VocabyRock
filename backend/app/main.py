@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager, suppress
 from datetime import date, timedelta
 from pathlib import Path
@@ -11,7 +12,7 @@ from sqlalchemy import String, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import audio_jobs, library_archive, pack_pdf, pixabay, wiktapi
+from . import audio_jobs, library_archive, pack_audio, pack_pdf, pixabay, wiktapi
 from .auth import (
     child,
     clear_failed_logins,
@@ -396,6 +397,40 @@ def get_pack(pack_id: int, db: Session = Depends(get_db), user: User = Depends(c
     return pack_data(require_pack(db, pack_id), db, user)
 
 
+@app.get("/api/packs/{pack_id}/audio-generation")
+def export_pack_audio_generation(
+    pack_id: int, db: Session = Depends(get_db), _: User = Depends(parent)
+):
+    pack = require_pack(db, pack_id)
+    payload = {
+        "format": "vacabyrock-audio-generation",
+        "version": 1,
+        "pack": {"guid": pack.guid, "name": pack.name},
+        "voice": "af_heart",
+        "takes_per_word": 3,
+        "speed": 1.0,
+        "words": [
+            {"guid": item.word.guid, "english": item.word.english, "ipa": item.word.ipa}
+            for item in pack.words
+        ],
+    }
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="pack-{pack.guid}-audio.json"'},
+    )
+
+
+@app.post("/api/packs/{pack_id}/audio")
+async def upload_pack_audio(
+    pack_id: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(parent),
+):
+    return await pack_audio.import_audio(require_pack(db, pack_id), files, db)
+
+
 @app.get("/api/packs/{pack_id}/print/{variant}")
 def print_pack(
     pack_id: int,
@@ -739,12 +774,13 @@ def media(name: str):
 
 @app.get("/audio/{name}")
 def audio(name: str):
-    if name != Path(name).name or Path(name).suffix not in {".mp3", ".ogg"}:
+    if name != Path(name).name or Path(name).suffix not in {".mp3", ".ogg", ".wav"}:
         raise HTTPException(404, "Pronunciation not found")
     path = get_settings().data_dir / "audio" / name
     if not path.is_file():
         raise HTTPException(404, "Pronunciation not found")
-    return FileResponse(path, media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/ogg")
+    media_type = {".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav"}
+    return FileResponse(path, media_type=media_type[path.suffix])
 
 
 dist = get_settings().frontend_dist

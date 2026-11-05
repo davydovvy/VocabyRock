@@ -19,6 +19,7 @@ const config = {
 const packs = [
   {
     id: 1,
+    guid: '00000000-0000-4000-8000-000000000099',
     name: 'Animals',
     description: 'Animal friends',
     category: 'Animals',
@@ -71,6 +72,7 @@ let firstMatchResults:
   { index: number; correct: boolean; answer: string; chosen: string; word_id: number }[] | null =
   null
 let pictureUploadFailures = 0
+let audioUploads: string[] = []
 let learnedChildren = new Set<number>()
 let savedWords: {
   id: number
@@ -141,6 +143,7 @@ function mockApi(
   submittedAnswers = []
   startedPractices = []
   pictureUploadFailures = 0
+  audioUploads = []
   learnedChildren = new Set()
   savedWords = []
   vi.stubGlobal(
@@ -166,6 +169,10 @@ function mockApi(
         return response({ words: 31, packs: 4 })
       if (path === '/library/archive' && options?.method === 'POST')
         return response({ words: 31, packs: 4 })
+      if (path === '/packs/1/audio' && options?.method === 'POST') {
+        audioUploads = (options.body as FormData).getAll('files').map((file) => (file as File).name)
+        return response({ imported: audioUploads.length, duplicates: 0 })
+      }
       if (path === '/packs') return response(packs)
       if (path.startsWith('/parent/practice-report?')) {
         const page = Number(new URL(path, 'http://localhost').searchParams.get('page') || '1')
@@ -895,6 +902,29 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Manage Words' }))
     await user.click(await screen.findByRole('button', { name: 'Listen to cat' }))
     expect(recordings).toEqual(['/audio/cat.mp3', '/audio/cat.mp3'])
+  })
+
+  it('shows audio export and uploads selected WAV files for a pack', async () => {
+    mockApi()
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Parent Parent area/ }))
+    await user.type(screen.getByLabelText('Password'), 'test-parent-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await user.click(await screen.findByRole('button', { name: 'Word Packs' }))
+    expect(screen.getByRole('button', { name: 'Audio JSON' })).toBeTruthy()
+    const input = screen.getByLabelText('Upload audio for Animals').querySelector('input')
+    expect(input).toBeTruthy()
+    await user.upload(
+      input as HTMLInputElement,
+      new File(['RIFF'], '00000000-0000-4000-8000-000000000001--cat--take01.wav', {
+        type: 'audio/wav',
+      }),
+    )
+    await waitFor(() =>
+      expect(audioUploads).toEqual(['00000000-0000-4000-8000-000000000001--cat--take01.wav']),
+    )
+    expect(await screen.findByText('1 pronunciation saved')).toBeTruthy()
   })
 
   it('lets the parent add a word with a Russian translation', async () => {

@@ -92,7 +92,7 @@ def export_archive(db: Session) -> StreamingResponse:
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for word in db.scalars(select(Word).order_by(Word.id)):
                 picture = _stored_path(word.picture, "images", {".webp"})
-                audio = _stored_path(word.audio, "audio", {".mp3", ".ogg"})
+                audio = _stored_path(word.audio, "audio", {".mp3", ".ogg", ".wav"})
                 picture_entry = _image_entry(word.guid, "word") if picture else None
                 audio_entry = _audio_entry(word.guid, audio.suffix) if audio else None
                 if picture:
@@ -215,6 +215,7 @@ def _read_archive(data: bytes) -> tuple[ArchiveManifest, dict[str, bytes]]:
                     if word.audio not in {
                         _audio_entry(guid, ".mp3"),
                         _audio_entry(guid, ".ogg"),
+                        _audio_entry(guid, ".wav"),
                     }:
                         raise HTTPException(400, "Archive has an invalid pronunciation path.")
                     expected.add(word.audio)
@@ -248,6 +249,10 @@ def _read_archive(data: bytes) -> tuple[ArchiveManifest, dict[str, bytes]]:
             raise HTTPException(400, "Archive contains an invalid Ogg recording.")
         elif name.endswith(".mp3") and not (content.startswith(b"ID3") or content[:1] == b"\xff"):
             raise HTTPException(400, "Archive contains an invalid MP3 recording.")
+        elif name.endswith(".wav") and not (
+            content.startswith(b"RIFF") and content[8:12] == b"WAVE"
+        ):
+            raise HTTPException(400, "Archive contains an invalid WAV recording.")
     return manifest, media
 
 
