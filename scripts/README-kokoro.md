@@ -151,20 +151,33 @@ warn that very short utterances can be weak. A reported
 that speeds below `1.0` can produce a phantom opening vowel. The default speed
 is `1.0`; compare the three takes and keep the cleanest one.
 
-For a word that still sounds wrong when spoken alone, try `--context-repeats 5`.
-This generates five repetitions from the IPA-derived phonemes and saves only
-the middle word, cutting at the neighboring spaces. A fade of up to 10 ms softens
-each cut edge. It is a separate trial:
-write it to a new output folder so the original takes remain available.
+For words that sound wrong when spoken alone, try the included
+[`kokoro_phrase_contexts.example.json`](kokoro_phrase_contexts.example.json).
+It gives `key` and `affirmative` two sentence contexts each. Kokoro transcribes
+the surrounding sentence, then the generator replaces the target word with its
+IPA-derived phonemes. It saves only the target word, cutting near the surrounding
+word boundary and pause. Each context is marked `context01`, `context02`, etc.
+in the filename and manifest. Keep this trial in a new output folder:
 
 ```bash
 python kokoro_words.py --input pack-audio.json --words key affirmative \
-  --context-repeats 5 --output kokoro-context-trial
+  --phrase-contexts kokoro_phrase_contexts.example.json \
+  --output kokoro-phrase-trial
 ```
 
-The manifest records `context_repeats` for each take. Word boundaries are
-estimated from Kokoro's predicted token durations, so listen for clipped first
-or last sounds before uploading. The `key` phonemes `kˈi` already match
-Kokoro's own English conversion; changing its IPA spelling cannot guarantee
-a better clip. The `affirmative` IPA `/əˈfɝməɾɪv/` now becomes
-`əfˈɜɹməTɪv`, matching Kokoro's flap token.
+To run this in Docker, mount that JSON file at `/input/contexts.json` alongside
+the pack export, then add `--phrase-contexts /input/contexts.json --words key
+affirmative` to the command. You can edit the sentences or add words with one
+`{word}` placeholder each. A word without an entry still uses direct synthesis.
+The target must appear between other words; a following comma often gives
+Kokoro room to finish it before the cut.
+
+The word boundaries are estimated from Kokoro's predicted token durations,
+so listen for clipped or extra sounds before uploading. The `key` phonemes
+`kˈi` already match Kokoro's own English conversion, yet isolated and repeated
+takes may still sound like a different word. The `affirmative` IPA
+`/əˈfɝməɾɪv/` becomes `əfˈɜɹməTɪv`, matching Kokoro's flap token, but that
+mapping alone may not remove an unwanted sound at the end.
+
+`--context-repeats 5` remains available as another experiment: it generates
+five repetitions and saves the middle one. Use it without `--phrase-contexts`.

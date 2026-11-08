@@ -1,0 +1,10 @@
+{
+  "key": [
+    "I found the {word}, then left.",
+    "This {word} opens the door."
+  ],
+  "affirmative": [
+    "I said {word}, then waited.",
+    "The answer was {word}, so we proceeded."
+  ]
+}

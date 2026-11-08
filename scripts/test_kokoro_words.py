@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from kokoro_words import (
     SAMPLE_INPUT,
@@ -11,6 +12,7 @@ from kokoro_words import (
     ipa_pronunciations,
     load_words,
     normalize_ipa,
+    phrase_phonemes,
     prepare,
     repeated_phonemes,
     take_speed,
@@ -32,7 +34,9 @@ class KokoroWordsTests(unittest.TestCase):
             filename("00000000-0000-4000-8000-000000000002", "value", "af_heart", 2),
             "00000000-0000-4000-8000-000000000002--value--pron01--af_heart--take02.wav",
         )
-        self.assertEqual([round(take_speed(1.0, take), 2) for take in (1, 2, 3)], [1.0, 1.05, 1.1])
+        self.assertEqual(
+            [round(take_speed(1.0, take), 2) for take in (1, 2, 3)], [1.0, 1.05, 1.1]
+        )
         self.assertEqual(
             [item["phonemes"] for item in ipa_pronunciations("[ˈsɛn.tn̩(t)s]")],
             ["sˈɛntᵊns", "sˈɛntᵊnts"],
@@ -51,6 +55,28 @@ class KokoroWordsTests(unittest.TestCase):
         audio = list(range(sum(durations) * 10))
         cropped = crop_middle_repetition(audio, durations, phonemes, 3)
         self.assertEqual(cropped, audio[80:160])
+
+    def test_phrase_context_keeps_saved_ipa_for_target_word(self):
+        tokens = [
+            SimpleNamespace(text="the", phonemes="ðə", whitespace=" "),
+            SimpleNamespace(text="key", phonemes="wrong", whitespace=""),
+            SimpleNamespace(text=",", phonemes=",", whitespace=" "),
+            SimpleNamespace(text="then", phonemes="ðˈɛn", whitespace=""),
+        ]
+        pipeline = SimpleNamespace(g2p=lambda text: ("ignored", tokens))
+        phonemes, start, end = phrase_phonemes(
+            pipeline, "key", "kˈi", "the {word}, then"
+        )
+        self.assertEqual(phonemes, "ðə kˈi, ðˈɛn")
+        self.assertEqual(phonemes[start:end], "kˈi")
+        self.assertEqual(
+            filename(
+                "00000000-0000-4000-8000-000000000002", "key", "af_heart", 1, 1, 2
+            ),
+            "00000000-0000-4000-8000-000000000002--key--pron01--context02--af_heart--take01.wav",
+        )
+        with self.assertRaisesRegex(ValueError, "must contain one"):
+            phrase_phonemes(pipeline, "key", "kˈi", "the key, then")
 
     def test_ambiguous_english_sound_requires_explicit_override(self):
         word = {
@@ -129,7 +155,9 @@ class KokoroWordsTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(load_words(path, None), [word])
-            self.assertEqual(prepare(load_words(path, None), [], None)[0]["guid"], word["guid"])
+            self.assertEqual(
+                prepare(load_words(path, None), [], None)[0]["guid"], word["guid"]
+            )
 
 
 if __name__ == "__main__":
