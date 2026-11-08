@@ -153,7 +153,8 @@ is `1.0`; compare the three takes and keep the cleanest one.
 
 For a word that still sounds wrong when spoken alone, try `--context-repeats 5`.
 This generates five repetitions from the IPA-derived phonemes and saves only
-the middle word, cutting at the neighboring spaces. It is a separate trial:
+the middle word, cutting at the neighboring spaces. A fade of up to 10 ms softens
+each cut edge. It is a separate trial:
 write it to a new output folder so the original takes remain available.
 
 ```bash

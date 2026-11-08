@@ -133,12 +133,16 @@ def ipa_pronunciations(ipa: str) -> list[dict[str, str]]:
     return pronunciations
 
 
-def filename(guid: str, word: str, voice: str, take: int, pronunciation: int = 1) -> str:
+def filename(
+    guid: str, word: str, voice: str, take: int, pronunciation: int = 1,
+    context: int = 0,
+) -> str:
     stem = re.sub(r"[^a-z0-9]+", "-", word.lower()).strip("-")
     if not stem:
         raise ValueError(f"Cannot make a filename for {word!r}")
     return (
-        f"{guid}--{stem}--pron{pronunciation:02d}--"
+        f"{guid}--{stem}--pron{pronunciation:02d}"
+        f"{'--context' + format(context, '02d') if context else ''}--"
         f"{voice.replace(',', '-')}--take{take:02d}.wav"
     )
 
@@ -151,14 +155,14 @@ def repeated_phonemes(phonemes: str, repeats: int) -> str:
     return " ".join([phonemes] * repeats)
 
 
-def crop_middle_repetition(audio: Any, pred_dur: Any, phonemes: str, repeats: int) -> Any:
-    """Cut the middle word from a longer utterance at neighboring space centers."""
-    tokens = repeated_phonemes(phonemes, repeats)
+def crop_word_span(audio: Any, pred_dur: Any, tokens: str, start: int, end: int) -> Any:
+    """Cut one word at the preceding space and following separator centers."""
     if len(pred_dur) != len(tokens) + 2:
-        raise RuntimeError("Kokoro returned unexpected token durations for repeated words")
-    middle = repeats // 2
-    start = middle * (len(phonemes) + 1)
-    end = start + len(phonemes)
+        raise RuntimeError("Kokoro returned unexpected token durations for the phrase")
+    if start < 1 or end >= len(tokens) or tokens[start - 1] != " ":
+        raise ValueError("Target word must be surrounded by context")
+    if tokens[end] not in " ,;:.!?":
+        raise ValueError("Target word needs a following separator")
     durations = [int(value) for value in pred_dur]
     start_frame = sum(durations[:start]) + durations[start] / 2
     end_frame = sum(durations[: end + 1]) + durations[end + 1] / 2
@@ -166,8 +170,39 @@ def crop_middle_repetition(audio: Any, pred_dur: Any, phonemes: str, repeats: in
     start_sample = round(start_frame * samples_per_frame)
     end_sample = round(end_frame * samples_per_frame)
     if end_sample <= start_sample:
-        raise RuntimeError("Kokoro returned an empty middle repetition")
+        raise RuntimeError("Kokoro returned an empty target word")
     return audio[start_sample:end_sample]
+
+
+def crop_middle_repetition(audio: Any, pred_dur: Any, phonemes: str, repeats: int) -> Any:
+    """Cut the middle word from a longer utterance."""
+    tokens = repeated_phonemes(phonemes, repeats)
+    middle = repeats // 2
+    start = middle * (len(phonemes) + 1)
+    end = start + len(phonemes)
+    return crop_word_span(audio, pred_dur, tokens, start, end)
+
+
+def phrase_phonemes(pipeline: Any, word: str, target: str, template: str) -> tuple[str, int, int]:
+    """Use Kokoro G2P for the sentence, but the saved IPA for its target word."""
+    if template.count("{word}") != 1:
+        raise ValueError(f"Phrase context for {word!r} must contain one {{word}}")
+    _, tokens = pipeline.g2p(template.replace("{word}", word))
+    matches = [index for index, token in enumerate(tokens) if token.text.casefold() == word.casefold()]
+    if len(matches) != 1:
+        raise ValueError(f"Phrase context must contain exactly one standalone {word!r}")
+    target_index = matches[0]
+    parts = []
+    for index, token in enumerate(tokens):
+        if token.phonemes is None:
+            raise ValueError(f"Kokoro could not transcribe {token.text!r} in a phrase context")
+        parts.append((target if index == target_index else token.phonemes) + token.whitespace)
+    phonemes = "".join(parts).strip()
+    start = len("".join(parts[:target_index]).lstrip())
+    end = start + len(target)
+    if start < 1 or end >= len(phonemes) or phonemes[start - 1] != " ":
+        raise ValueError(f"Place {word!r} between other words in the phrase context")
+    return phonemes, start, end
 
 
 def prepare(
@@ -240,6 +275,7 @@ def generate(
     device: str,
     overwrite: bool,
     context_repeats: int = 1,
+    phrase_contexts: dict[str, list[str]] | None = None,
 ) -> None:
     try:
         import soundfile as sf
@@ -265,10 +301,15 @@ def generate(
                     f"symbols {unsupported!r} after conversion to {pronunciation['phonemes']!r}"
                 )
 
+    phrase_contexts = phrase_contexts or {}
     paths = [
-        output / filename(item["guid"], item["english"], voice, take, pronunciation)
+        output / filename(item["guid"], item["english"], voice, take, pronunciation, context)
         for item in prepared
         for pronunciation in range(1, len(item["pronunciations"]) + 1)
+        for context in (
+            range(1, len(phrase_contexts[item["english"].casefold()]) + 1)
+            if item["english"].casefold() in phrase_contexts else (0,)
+        )
         for take in range(1, takes + 1)
     ]
     paths.append(output / "manifest.json")
@@ -279,38 +320,67 @@ def generate(
     for item in prepared:
         item["takes"] = []
         for pronunciation_index, pronunciation in enumerate(item["pronunciations"], 1):
-            for take in range(1, takes + 1):
-                # Kokoro inference is deterministic; vary speed to make distinct takes.
-                current_speed = take_speed(speed, take)
-                phonemes = repeated_phonemes(pronunciation["phonemes"], context_repeats)
-                result = next(
-                    pipeline.generate_from_tokens(
-                        phonemes, voice=voice, speed=current_speed
-                    ),
-                    None,
-                )
-                if result is None or result.audio is None or result.audio.numel() == 0:
-                    raise RuntimeError(f"Kokoro produced no audio for {item['english']!r}")
-                audio = result.audio
-                if context_repeats > 1:
-                    if result.pred_dur is None:
-                        raise RuntimeError("Kokoro returned no token durations for context cropping")
-                    audio = crop_middle_repetition(
-                        audio, result.pred_dur, pronunciation["phonemes"], context_repeats
+            contexts = phrase_contexts.get(item["english"].casefold())
+            choices = list(enumerate(contexts, 1)) if contexts else [(0, None)]
+            for context_index, template in choices:
+                if template:
+                    phonemes, start, end = phrase_phonemes(
+                        pipeline, item["english"], pronunciation["phonemes"], template
                     )
-                name = filename(item["guid"], item["english"], voice, take, pronunciation_index)
-                sf.write(output / name, audio.cpu().numpy(), 24000, subtype="PCM_16")
-                item["takes"].append(
-                    {
-                        "voice": voice, "take": take, "speed": current_speed,
-                        "pronunciation": pronunciation_index, "file": name,
-                        "context_repeats": context_repeats,
-                    }
-                )
-                print(
-                    f"{item['english']:<16} {voice} pronunciation {pronunciation_index} "
-                    f"take {take} -> {output / name}"
-                )
+                else:
+                    phonemes = repeated_phonemes(pronunciation["phonemes"], context_repeats)
+                unsupported = sorted(set(phonemes) - vocabulary.keys())
+                if unsupported:
+                    raise ValueError(
+                        f"{item['english']!r}: phrase context has Kokoro-unsupported "
+                        f"symbols {unsupported!r}"
+                    )
+                for take in range(1, takes + 1):
+                    # Kokoro inference is deterministic; vary speed to make distinct takes.
+                    current_speed = take_speed(speed, take)
+                    result = next(
+                        pipeline.generate_from_tokens(
+                            phonemes, voice=voice, speed=current_speed
+                        ),
+                        None,
+                    )
+                    if result is None or result.audio is None or result.audio.numel() == 0:
+                        raise RuntimeError(f"Kokoro produced no audio for {item['english']!r}")
+                    audio = result.audio
+                    if template or context_repeats > 1:
+                        if result.pred_dur is None:
+                            raise RuntimeError("Kokoro returned no token durations for context cropping")
+                        if template:
+                            audio = crop_word_span(audio, result.pred_dur, phonemes, start, end)
+                        else:
+                            audio = crop_middle_repetition(
+                                audio, result.pred_dur, pronunciation["phonemes"], context_repeats
+                            )
+                        # The cut can land inside residual speech energy; soften both edges.
+                        audio = audio.clone()
+                        fade_samples = min(240, len(audio) // 10)
+                        if fade_samples:
+                            fade = torch.linspace(0, 1, fade_samples, device=audio.device)
+                            audio[:fade_samples] *= fade
+                            audio[-fade_samples:] *= fade.flip(0)
+                    name = filename(
+                        item["guid"], item["english"], voice, take,
+                        pronunciation_index, context_index,
+                    )
+                    sf.write(output / name, audio.cpu().numpy(), 24000, subtype="PCM_16")
+                    item["takes"].append(
+                        {
+                            "voice": voice, "take": take, "speed": current_speed,
+                            "pronunciation": pronunciation_index, "file": name,
+                            "context_repeats": context_repeats,
+                            "phrase_context": template,
+                            "synthesis_phonemes": phonemes,
+                        }
+                    )
+                    print(
+                        f"{item['english']:<16} {voice} pronunciation {pronunciation_index} "
+                        f"context {context_index} take {take} -> {output / name}"
+                    )
 
     manifest = {
         "model": MODEL_ID,
@@ -320,6 +390,7 @@ def generate(
         "device": device,
         "sample_rate": 24000,
         "context_repeats": context_repeats,
+        "phrase_contexts": phrase_contexts,
         "words": prepared,
     }
     (output / "manifest.json").write_text(
@@ -349,6 +420,10 @@ def main() -> int:
         help="Generate an odd number of repetitions and save the middle word (try 5 for short words)",
     )
     parser.add_argument(
+        "--phrase-contexts", type=Path,
+        help="JSON mapping words to sentence templates containing {word}",
+    )
+    parser.add_argument(
         "--overrides", type=Path, help="JSON mapping English words to Kokoro phoneme strings"
     )
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
@@ -376,6 +451,8 @@ def main() -> int:
             raise ValueError("--speed must be positive")
         if args.context_repeats not in (1, 3, 5, 7):
             raise ValueError("--context-repeats must be 1, 3, 5, or 7")
+        if args.phrase_contexts and args.context_repeats != 1:
+            raise ValueError("Use either --phrase-contexts or --context-repeats")
         if not isinstance(voice, str) or not re.fullmatch(r"a[fm]_[a-z0-9]+", voice):
             raise ValueError(f"Invalid American English voice: {voice!r}")
         overrides = {}
@@ -395,6 +472,26 @@ def main() -> int:
                 ):
                     raise ValueError(f"Invalid override for {word!r}")
                 overrides[word.casefold()] = choices
+        phrase_contexts = {}
+        if args.phrase_contexts:
+            raw_contexts = json.loads(args.phrase_contexts.read_text(encoding="utf-8"))
+            if not isinstance(raw_contexts, dict):
+                raise ValueError("--phrase-contexts must contain a JSON object")
+            for word, templates in raw_contexts.items():
+                if not isinstance(word, str):
+                    raise ValueError("Phrase context word names must be strings")
+                if isinstance(templates, str):
+                    templates = [templates]
+                if (
+                    not isinstance(templates, list)
+                    or not 1 <= len(templates) <= MAX_PRONUNCIATIONS
+                    or any(
+                        not isinstance(template, str) or template.count("{word}") != 1
+                        for template in templates
+                    )
+                ):
+                    raise ValueError(f"Invalid phrase contexts for {word!r}")
+                phrase_contexts[word.casefold()] = templates
         prepared = prepare(load_words(args.input, args.pack), args.words, args.limit, overrides)
         if args.dry_run:
             for item in prepared:
@@ -404,17 +501,24 @@ def main() -> int:
                         f"  pronunciation {pronunciation_index}: "
                         f"{pronunciation['ipa_variant']} -> {pronunciation['phonemes']}"
                     )
-                    for take in range(1, takes + 1):
-                        print(
-                            "    "
-                            + filename(
-                                item["guid"], item["english"], voice, take, pronunciation_index
+                    contexts = phrase_contexts.get(item["english"].casefold())
+                    for context_index, template in (
+                        enumerate(contexts, 1) if contexts else [(0, None)]
+                    ):
+                        if template:
+                            print(f"    context {context_index}: {template}")
+                        for take in range(1, takes + 1):
+                            print(
+                                "    "
+                                + filename(
+                                    item["guid"], item["english"], voice, take,
+                                    pronunciation_index, context_index,
+                                )
                             )
-                        )
         else:
             generate(
                 prepared, args.output, voice, takes, speed, args.device, args.overwrite,
-                args.context_repeats,
+                args.context_repeats, phrase_contexts,
             )
     except (OSError, KeyError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
         print(f"Error: {exc}", file=sys.stderr)
