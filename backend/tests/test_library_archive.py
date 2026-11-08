@@ -69,8 +69,6 @@ def test_archive_replaces_library_and_preserves_matching_progress(client, databa
         with database() as db:
             stored = db.get(Word, word["id"])
             stored.audio = "/audio/lantern.mp3"
-            stored.audio_status = "ready"
-            stored.audio_source_url = "https://upload.wikimedia.org/test.mp3"
             db.add(
                 Progress(
                     user_id=child["id"],
@@ -104,7 +102,6 @@ def test_archive_replaces_library_and_preserves_matching_progress(client, databa
             archived_word = next(item for item in manifest["words"] if item["guid"] == word["guid"])
             archived_pack = next(item for item in manifest["packs"] if item["guid"] == pack["guid"])
             assert archived_word["ipa"] == "/ˈlæntərn/"
-            assert archived_word["audio_source_url"] == "https://upload.wikimedia.org/test.mp3"
             assert archive.read(archived_word["audio"]) == audio_bytes
             assert archive.read(archived_word["picture"])
             assert archive.read(archived_pack["cover"])
@@ -216,5 +213,64 @@ def test_archive_rejects_invalid_files_without_changing_library(client, database
         assert (await client.get("/api/export")).status_code == 404
         with database() as db:
             assert db.scalar(select(Word).where(Word.guid == original_words[0]["guid"]))
+
+    run(scenario())
+
+
+def test_archive_without_audio_keeps_existing_recordings_for_matching_words(client, database):
+    async def scenario():
+        await client.post("/api/auth/parent", json={"password": "test-parent-password"})
+        word = (
+            await client.post("/api/words", json={"english": "Lantern", "translations": ["фонарь"]})
+        ).json()
+        audio_bytes = b"ID3" + b"uploaded pronunciation"
+        audio_file = get_settings().data_dir / "audio" / "uploaded-lantern.mp3"
+        audio_file.parent.mkdir(parents=True, exist_ok=True)
+        audio_file.write_bytes(audio_bytes)
+        with database() as db:
+            stored = db.get(Word, word["id"])
+            stored.audio = "/audio/uploaded-lantern.mp3"
+            db.commit()
+
+        exported = await client.get("/api/library/archive")
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as source:
+            manifest = json.loads(source.read("manifest.json"))
+            matching = next(item for item in manifest["words"] if item["guid"] == word["guid"])
+            audio_entry = matching["audio"]
+            matching["audio"] = None
+            matching.update(
+                {
+                    "audio_source_url": "https://upload.wikimedia.org/old.mp3",
+                    "audio_status": "pending",
+                    "audio_attempts": 2,
+                    "audio_next_attempt_at": None,
+                    "audio_error": None,
+                }
+            )
+            without_audio = io.BytesIO()
+            with zipfile.ZipFile(without_audio, "w") as archive:
+                for name in source.namelist():
+                    if name == "manifest.json":
+                        archive.writestr(name, json.dumps(manifest))
+                    elif name != audio_entry:
+                        archive.writestr(name, source.read(name))
+
+        imported = await client.post(
+            "/api/library/archive",
+            files={"file": ("library.zip", without_audio.getvalue(), "application/zip")},
+        )
+        assert imported.status_code == 200, imported.text
+        restored = (await client.get(f"/api/words/{word['id']}")).json()
+        assert restored["audio"] == "/audio/uploaded-lantern.mp3"
+        assert (await client.get(restored["audio"])).content == audio_bytes
+        assert audio_file.read_bytes() == audio_bytes
+        reexported = await client.get("/api/library/archive")
+        with zipfile.ZipFile(io.BytesIO(reexported.content)) as archive:
+            next_manifest = json.loads(archive.read("manifest.json"))
+            next_word = next(
+                item for item in next_manifest["words"] if item["guid"] == word["guid"]
+            )
+            assert "audio_status" not in next_word
+            assert "audio_source_url" not in next_word
 
     run(scenario())

@@ -12,7 +12,6 @@ services:
       FRONTEND_DIST: /app/frontend/dist
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
-      AUDIO_DOWNLOADS_ENABLED: ${AUDIO_DOWNLOADS_ENABLED:-false}
     volumes:
       - ${DATA_PATH:-./data}:/data
     user: "${PUID:-10001}:${PGID:-10001}"

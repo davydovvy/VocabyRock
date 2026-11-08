@@ -1,6 +1,4 @@
-import asyncio
 import json
-from contextlib import asynccontextmanager, suppress
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
@@ -12,7 +10,7 @@ from sqlalchemy import String, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from . import audio_jobs, library_archive, pack_audio, pack_pdf, pixabay, wiktapi
+from . import library_archive, pack_audio, pack_pdf, pixabay, wiktapi
 from .auth import (
     child,
     clear_failed_logins,
@@ -27,7 +25,7 @@ from .auth import (
 from .config import get_settings
 from .db import get_db
 from .learning import create_practice, public_session, reveal_hint, submit_all_pairs, submit_answer
-from .media import remove_picture, save_picture, save_picture_data
+from .media import remove_audio, remove_picture, save_picture, save_picture_data
 from .models import AppSettings, Pack, PackWord, PracticeSession, Progress, User, Word, now
 from .practice_report import report as practice_report
 from .schemas import (
@@ -45,25 +43,7 @@ from .schemas import (
 )
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    worker = (
-        asyncio.create_task(audio_jobs.run_worker())
-        if get_settings().audio_downloads_enabled
-        else None
-    )
-    try:
-        yield
-    finally:
-        if worker is not None:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
-
-
-app = FastAPI(
-    title="VacabyRock", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan
-)
+app = FastAPI(title="VacabyRock", docs_url="/api/docs", openapi_url="/api/openapi.json")
 AVATARS = ["fox", "bear", "rabbit", "cat", "dog", "owl", "panda", "koala"]
 
 
@@ -242,10 +222,7 @@ def add_word(
     if pack_id is not None:
         require_pack(db, pack_id)
     reject_duplicate_word(db, body.english)
-    fields = body.model_dump(exclude={"audio_url"})
-    word = Word(**fields)
-    if body.audio_url:
-        audio_jobs.queue_audio(word, body.audio_url)
+    word = Word(**body.model_dump())
     db.add(word)
     if pack_id is not None:
         db.flush()
@@ -275,21 +252,8 @@ def edit_word(
 ):
     word = require_word(db, word_id)
     reject_duplicate_word(db, body.english, word_id)
-    for key, value in body.model_dump(exclude={"audio_url"}).items():
+    for key, value in body.model_dump().items():
         setattr(word, key, value)
-    if body.audio_url:
-        audio_jobs.queue_audio(word, body.audio_url)
-    db.commit()
-    db.refresh(word)
-    return word
-
-
-@app.post("/api/words/{word_id}/audio/retry")
-def retry_word_audio(word_id: int, db: Session = Depends(get_db), _: User = Depends(parent)):
-    word = require_word(db, word_id)
-    if word.audio_status != "failed" or not word.audio_source_url:
-        raise HTTPException(409, "This word has no failed pronunciation download.")
-    audio_jobs.queue_audio(word, word.audio_source_url)
     db.commit()
     db.refresh(word)
     return word
@@ -305,7 +269,7 @@ def delete_word(word_id: int, db: Session = Depends(get_db), _: User = Depends(p
     db.delete(word)
     db.commit()
     remove_picture(picture)
-    wiktapi.remove_audio(audio_path)
+    remove_audio(audio_path)
     return {"ok": True}
 
 

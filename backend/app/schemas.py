@@ -31,7 +31,7 @@ class WordInput(BaseModel):
 
 
 class WordSaveInput(WordInput):
-    audio_url: str | None = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class WordOut(WordInput):
@@ -40,8 +40,6 @@ class WordOut(WordInput):
     guid: str
     picture: str | None
     audio: str | None
-    audio_status: str | None
-    audio_error: str | None
     created_at: datetime
     updated_at: datetime
 

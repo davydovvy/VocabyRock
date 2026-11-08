@@ -39,3 +39,8 @@ def save_picture_data(data: bytes) -> str:
 def remove_picture(path: str | None):
     if path and path.startswith("/media/"):
         (get_settings().data_dir / "images" / Path(path).name).unlink(missing_ok=True)
+
+
+def remove_audio(path: str | None) -> None:
+    if path and path.startswith("/audio/"):
+        (get_settings().data_dir / "audio" / Path(path).name).unlink(missing_ok=True)

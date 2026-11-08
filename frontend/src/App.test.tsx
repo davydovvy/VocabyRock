@@ -82,7 +82,6 @@ let savedWords: {
   part_of_speech: string | null
   picture: string | null
   audio?: string | null
-  audio_status?: string | null
   example_en: string | null
   example_ru: string | null
   notes: string | null
@@ -350,7 +349,6 @@ function mockApi(
           id: 1,
           picture: null,
           audio: null,
-          audio_status: input.audio_url ? 'pending' : null,
         }
         savedWords.push(word)
         return response(word, 201)
@@ -368,13 +366,6 @@ function mockApi(
           ],
           ipa: '/tɹiː/',
           part_of_speech: 'noun',
-          audio: [
-            {
-              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/tree.mp3',
-              label: 'tree.mp3',
-              tags: ['US'],
-            },
-          ],
         })
       if (path === '/dictionary?word=live')
         return response({
@@ -398,20 +389,6 @@ function mockApi(
           ipa: '/lɪv/',
           part_of_speech: 'verb',
           us_spelling: '',
-          audio: [
-            {
-              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/live-verb.mp3',
-              label: 'Verb',
-              tags: ['US'],
-              entry_index: 0,
-            },
-            {
-              url: 'https://upload.wikimedia.org/wikipedia/commons/a/ab/live-adjective.mp3',
-              label: 'Adjective',
-              tags: ['US'],
-              entry_index: 1,
-            },
-          ],
         })
       if (path === '/dictionary?word=january')
         return response({
@@ -849,7 +826,7 @@ describe('critical child and parent interactions', () => {
     expect(requests.filter((request) => request === 'PUT /progress/learned')).toHaveLength(3)
   })
 
-  it('plays downloaded word audio from vocabulary and pack lists', async () => {
+  it('plays stored word audio from vocabulary and pack lists', async () => {
     mockApi()
     savedWords.push(
       {
@@ -860,7 +837,6 @@ describe('critical child and parent interactions', () => {
         part_of_speech: null,
         picture: null,
         audio: '/audio/cat.mp3',
-        audio_status: 'ready',
         example_en: null,
         example_ru: null,
         notes: null,
@@ -1096,7 +1072,7 @@ describe('critical child and parent interactions', () => {
     expect(savedWords).toHaveLength(1)
   })
 
-  it('offers dictionary translations and saves the selected recording', async () => {
+  it('offers dictionary translations without Wiki audio controls', async () => {
     mockApi()
     const user = userEvent.setup()
     render(<App />)
@@ -1124,17 +1100,15 @@ describe('critical child and parent interactions', () => {
     const nounType = screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement
     expect(nounType.value).toBe('')
     await user.selectOptions(nounType, 'singular countable')
-    await user.click(screen.getByRole('radio', { name: /US/ }))
+    expect(screen.queryByRole('radio', { name: /US/ })).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     await waitFor(() => expect(savedWords).toHaveLength(1))
     expect(savedWords[0].translations).toEqual(['де́рево'])
-    expect(
-      (savedWords[0] as (typeof savedWords)[number] & { audio_url: string }).audio_url,
-    ).toContain('upload.wikimedia.org')
-    expect(await screen.findByText('Audio queued for download')).toBeTruthy()
+    expect('audio_url' in savedWords[0]).toBe(false)
+    expect(screen.queryByText('Audio queued for download')).toBeNull()
   })
 
-  it('uses the pronunciation and recording for the selected meaning', async () => {
+  it('uses the pronunciation for the selected meaning', async () => {
     mockApi()
     const user = userEvent.setup()
     render(<App />)
@@ -1147,15 +1121,12 @@ describe('critical child and parent interactions', () => {
     await user.click(screen.getByRole('button', { name: 'Fill from Wikimedia' }))
     await screen.findByRole('button', { name: /живой/ })
     expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('')
-    expect(screen.getByText('Choose a meaning to see its pronunciation recordings.')).toBeTruthy()
     expect(screen.queryByRole('radio', { name: /US/ })).toBeNull()
     await user.click(screen.getByRole('button', { name: /живой/ }))
     expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/laɪv/')
     expect(
       (screen.getByRole('combobox', { name: 'Part of speech' }) as HTMLSelectElement).value,
     ).toBe('adjective')
-    expect(screen.getByRole('radio', { name: /US/ })).toBeTruthy()
-    expect(screen.queryByRole('audio', { name: 'Preview Verb' })).toBeNull()
     await user.click(screen.getByRole('button', { name: /жить/ }))
     expect((screen.getByLabelText('IPA') as HTMLInputElement).value).toBe('/lɪv/')
     expect(
@@ -1164,7 +1135,6 @@ describe('critical child and parent interactions', () => {
     expect(
       (screen.getByLabelText('Russian translations (separate with ;)') as HTMLInputElement).value,
     ).toBe('жить')
-    await user.click(screen.getByRole('radio', { name: /US/ }))
     await user.click(screen.getByRole('button', { name: 'Save Word' }))
     await waitFor(() => expect(savedWords).toHaveLength(1))
     expect(savedWords[0].ipa).toBe('/lɪv/')

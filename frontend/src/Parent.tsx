@@ -121,7 +121,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const [dictionary, setDictionary] = useState<DictionaryResult | null>(null)
   const [dictionaryBusy, setDictionaryBusy] = useState(false)
   const [dictionaryError, setDictionaryError] = useState('')
-  const [selectedAudio, setSelectedAudio] = useState('')
   const [selectedDictionaryEntry, setSelectedDictionaryEntry] = useState<number | null>(null)
   const dictionaryRequest = useRef(0)
   const [showWordForm, setShowWordForm] = useState(false)
@@ -177,16 +176,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     if (tab === 'progress' || tab === 'overview' || tab === 'words' || tab === 'packs')
       void refreshStats().catch((e) => setError(e.message))
   }, [tab])
-  useEffect(() => {
-    if (!words.some((word) => word.audio_status === 'pending' || word.audio_status === 'retrying'))
-      return
-    const timer = window.setInterval(() => {
-      void api<Word[]>('/words')
-        .then(setWords)
-        .catch(() => {})
-    }, 10000)
-    return () => window.clearInterval(timer)
-  }, [words])
   const run = async (action: () => Promise<unknown>, message: string) => {
     setError('')
     setNotice('')
@@ -286,7 +275,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionary(null)
     setDictionaryError('')
     setDictionaryBusy(false)
-    setSelectedAudio('')
     setSelectedDictionaryEntry(null)
     setPictureChoice(null)
     setShowPictureSearch(false)
@@ -324,7 +312,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     setDictionary(null)
     setDictionaryError('')
     setDictionaryBusy(false)
-    setSelectedAudio('')
     setSelectedDictionaryEntry(null)
     setError('')
     if (pixabayQuery === wordForm.english) setPixabayQuery(value)
@@ -378,14 +365,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         : [...values.filter((value) => value !== suggestion), suggestion]
       ).join('; '),
     )
-    if (
-      switchingEntry ||
-      (selectedAudio &&
-        !dictionary?.audio.some(
-          (audio) => audio.url === selectedAudio && (audio.entry_index ?? 0) === entryIndex,
-        ))
-    )
-      setSelectedAudio('')
     setSelectedDictionaryEntry(entryIndex)
     setWordForm((current) => ({
       ...current,
@@ -408,10 +387,8 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         .split(';')
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean),
-      audio_url: selectedAudio || null,
     }
     const wasEditing = Boolean(editingWord)
-    const hasAudio = Boolean(selectedAudio)
     let savedWord: Word | null = null
     let saveStage: 'word' | 'picture' | 'refresh' = 'word'
     setSavingWord(true)
@@ -427,7 +404,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
         json(editingWord ? 'PUT' : 'POST', body),
       )
       setEditingWord(savedWord)
-      setSelectedAudio('')
       saveStage = 'picture'
       if (pictureChoice?.kind === 'upload') {
         const form = new FormData()
@@ -454,7 +430,7 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
       await refresh()
       closeWord()
       setNotice(
-        `${wasEditing ? 'Word saved' : wordPack ? `Word added to ${wordPack.name}` : 'Word added'}${hasAudio ? '; audio download queued' : ''}`,
+        wasEditing ? 'Word saved' : wordPack ? `Word added to ${wordPack.name}` : 'Word added',
       )
     } catch (e) {
       const prefix =
@@ -472,9 +448,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
   const deleteWord = (word: Word) => {
     if (window.confirm(`Delete “${word.english}” from the library and all packs?`))
       void run(() => api(`/words/${word.id}`, json('DELETE')), 'Word deleted')
-  }
-  const retryAudio = async (word: Word) => {
-    await run(() => api(`/words/${word.id}/audio/retry`, json('POST')), 'Audio download queued')
   }
   const openPack = (pack?: Pack) => {
     setError('')
@@ -598,14 +571,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
     }, 'Progress reset')
   }
 
-  const dictionaryHasDifferentPronunciations =
-    new Set(dictionary?.translations.map((item) => item.ipa).filter(Boolean)).size > 1
-  const dictionaryAudio =
-    dictionary?.audio.filter((item) =>
-      selectedDictionaryEntry === null
-        ? !dictionaryHasDifferentPronunciations
-        : (item.entry_index ?? 0) === selectedDictionaryEntry,
-    ) || []
   const tabs: { key: Tab; label: string; icon: typeof BookOpen }[] = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
     { key: 'dashboard', label: 'Exercise dashboard', icon: LayoutDashboard },
@@ -781,29 +746,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                   <p className="mt-2 text-sm leading-snug text-[#747995] font-bold break-words">
                     {word.translations.join(' · ')}
                   </p>
-                  {word.audio_status === 'pending' && (
-                    <p className="mt-2 text-xs font-bold text-violet">
-                      {word.audio_error || 'Audio queued for download'}
-                    </p>
-                  )}
-                  {word.audio_status === 'retrying' && (
-                    <p className="mt-2 text-xs font-bold text-violet">
-                      {word.audio_error || 'Audio retry scheduled'}
-                    </p>
-                  )}
-                  {word.audio_status === 'failed' && (
-                    <p className="mt-2 text-xs font-bold text-coral break-words">
-                      Audio download failed{word.audio_error ? `: ${word.audio_error}` : ''}
-                    </p>
-                  )}
-                  {word.audio_status === 'failed' && (
-                    <button
-                      className="btn-soft !min-h-10 !px-3 !py-1 text-sm mt-auto self-start"
-                      onClick={() => void retryAudio(word)}
-                    >
-                      Retry audio
-                    </button>
-                  )}
                 </div>
                 <div className="flex flex-col justify-between gap-2">
                   {audioButton(word)}
@@ -1067,7 +1009,8 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
             <h2 className="text-2xl font-black">Import vocabulary archive</h2>
             <p className="mt-2 font-bold text-[#747995]">
               Replace this device’s words and packs with an archive. Matching words keep the
-              children’s learning progress. Words missing from the archive are removed.
+              children’s learning progress and existing audio when the archive has none. Words
+              missing from the archive are removed.
             </p>
             <label className="label mt-5" htmlFor="library-archive">
               ZIP archive
@@ -1388,44 +1331,6 @@ export default function Parent({ config, onLogout }: { config: Config; onLogout:
                     </div>
                   ) : (
                     <p>No Russian translations found. Enter one manually.</p>
-                  )}
-                  <p className="label mt-4">Pronunciation recordings</p>
-                  {dictionaryHasDifferentPronunciations && selectedDictionaryEntry === null && (
-                    <p className="text-sm font-bold text-violet">
-                      Choose a meaning to see its pronunciation recordings.
-                    </p>
-                  )}
-                  {dictionaryAudio.length ? (
-                    <>
-                      <label className="flex items-center gap-3 py-1">
-                        <input
-                          type="radio"
-                          name="dictionary-audio"
-                          checked={!selectedAudio}
-                          onChange={() => setSelectedAudio('')}
-                        />
-                        <span>No recording</span>
-                      </label>
-                      {dictionaryAudio.map((item) => (
-                        <label key={item.url} className="flex items-center gap-3 py-1">
-                          <input
-                            type="radio"
-                            name="dictionary-audio"
-                            checked={selectedAudio === item.url}
-                            onChange={() => setSelectedAudio(item.url)}
-                          />
-                          <span>{item.tags.join(', ') || 'Accent unspecified'}</span>
-                          <audio
-                            controls
-                            preload="none"
-                            src={item.url}
-                            aria-label={`Preview ${item.label}`}
-                          />
-                        </label>
-                      ))}
-                    </>
-                  ) : (
-                    <p>No recording found.</p>
                   )}
                 </>
               )}

@@ -21,13 +21,12 @@ from app.seed import seed
 from .conftest import run
 
 
-def record_audio(word: Word) -> None:
+def record_audio(word: Word, suffix: str = ".mp3") -> None:
     audio_dir = get_settings().data_dir / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"word-{word.id}.mp3"
+    filename = f"word-{word.id}{suffix}"
     (audio_dir / filename).write_bytes(b"ID3test")
     word.audio = f"/audio/{filename}"
-    word.audio_status = "ready"
 
 
 def test_answer_checking_and_multiple_translations(database):
@@ -231,32 +230,32 @@ def test_study_games_use_every_unlearned_pack_word_for_each_child(database):
             assert {task["word_id"] for task in match.tasks} <= word_ids
 
 
-def test_listen_uses_only_words_with_downloaded_audio(database):
+def test_listen_uses_only_words_with_local_audio(database):
     with database() as db:
         child = db.scalar(select(User).where(User.role == "child"))
         pack = db.scalar(select(Pack).where(Pack.name == "Animals"))
         recorded = pack.words[0].word
         missing = pack.words[1].word
-        pending = pack.words[2].word
+        wav_recorded = pack.words[2].word
         record_audio(recorded)
+        record_audio(wav_recorded, ".wav")
         missing.audio = "/audio/missing.mp3"
-        missing.audio_status = "ready"
-        pending.audio_status = "pending"
         db.flush()
 
         for direction in ("en-ru", "ru-en"):
             session = create_practice(db, child, pack.id, "all", "listen", direction, 1)
-            assert [task["word_id"] for task in session.tasks] == [recorded.id]
-            assert session.tasks[0]["audio"] == recorded.audio
+            assert session.tasks[0]["word_id"] in {recorded.id, wav_recorded.id}
             explicit = create_practice(
                 db, child, pack.id, "all", "listen", direction, 1, [missing.id, recorded.id]
             )
             assert [task["word_id"] for task in explicit.tasks] == [recorded.id]
+            wav = create_practice(
+                db, child, pack.id, "all", "listen", direction, 1, [wav_recorded.id]
+            )
+            assert wav.tasks[0]["audio"] == wav_recorded.audio
 
-        with pytest.raises(HTTPException, match="downloaded audio"):
+        with pytest.raises(HTTPException, match="saved recordings"):
             create_practice(db, child, pack.id, "all", "listen", "en-ru", 1, [missing.id])
-        with pytest.raises(HTTPException, match="downloaded audio"):
-            create_practice(db, child, pack.id, "all", "listen", "en-ru", 1, [pending.id])
 
 
 def test_flipping_card_without_rating_does_not_mark_word_learned(database):

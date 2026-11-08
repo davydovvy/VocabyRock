@@ -16,15 +16,11 @@ export type Word = {
   part_of_speech: string | null
   picture: string | null
   audio: string | null
-  audio_status?: 'pending' | 'retrying' | 'ready' | 'failed' | null
-  audio_error?: string | null
   example_en: string | null
   example_ru: string | null
   notes: string | null
 }
-export type WordInput = Omit<Word, 'id' | 'guid' | 'picture' | 'audio'> & {
-  audio_url?: string | null
-}
+export type WordInput = Omit<Word, 'id' | 'guid' | 'picture' | 'audio'>
 export type DictionaryResult = {
   word: string
   translations: {
@@ -37,7 +33,6 @@ export type DictionaryResult = {
   ipa: string
   part_of_speech: string
   us_spelling: string
-  audio: { url: string; label: string; tags: string[]; entry_index?: number }[]
 }
 export type Pack = {
   id: number

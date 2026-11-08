@@ -2,11 +2,12 @@
 
 In the parent admin page, open **Word Packs** and select **Audio JSON** on a pack.
 Copy the downloaded JSON to the GPU computer. `kokoro_words.py` generates three
-24 kHz WAV takes per word using `af_heart`. Each filename starts with the word's
-existing GUID, followed by the word and take number. Kokoro receives phonemes
-derived from the saved IPA field.
+24 kHz WAV takes per pronunciation using `af_heart`. When the saved IPA marks a
+sound as optional, it generates both pronunciations. Each filename starts with
+the word's existing GUID, followed by the word, pronunciation, and take number.
+Kokoro receives phonemes derived from the saved IPA field.
 
-After listening, keep the preferred WAV for each word and delete the other two.
+After listening, keep the preferred WAV for each word and delete the others.
 On the same pack in the admin page, select **Upload audio** and choose the WAVs.
 If you select multiple takes for one GUID, the first selected file is used and
 the rest are skipped. Uploading a new take replaces that word's prior audio.
@@ -23,9 +24,10 @@ mkdir -p input output/kokoro-audio output/kokoro-cache
 # Copy the exported pack JSON into input/pack-audio.json.
 docker run --rm --gpus all --user "$(id -u):$(id -g)" \
   -v "$PWD/input/pack-audio.json:/input/pack-audio.json:ro" \
+  -v "$PWD/scripts/kokoro_overrides.example.json:/input/overrides.json:ro" \
   -v "$PWD/output/kokoro-audio:/output" \
   -v "$PWD/output/kokoro-cache:/cache" \
-  kokoro-words --input /input/pack-audio.json
+  kokoro-words --input /input/pack-audio.json --overrides /input/overrides.json
 ```
 
 This default image uses the CUDA 12.8 PyTorch wheel. On an NVIDIA host, Docker
@@ -40,8 +42,9 @@ with `--device /dev/kfd --device /dev/dri --security-opt seccomp=unconfined`.
 ROCm compatibility depends on the specific GPU and host driver.
 
 Each word gets three takes in the same `af_heart` voice, at speeds 1.0,
-1.05, and 1.10 by default. Kokoro inference is deterministic at a fixed
-speed, so a different random seed would not produce a different take.
+1.05, and 1.10 by default, for each pronunciation choice. Kokoro inference is
+deterministic at a fixed speed, so a different random seed would not produce a
+different take.
 Use `--dry-run` to preview filenames, `--limit 3` for a short trial, `--words
 sure bridge` to select words, or `--takes 1` to generate one take. For a
 vocabulary ZIP, add a read-only file mount and the input arguments:
@@ -77,16 +80,18 @@ The last command must print `True`. PyTorch exposes ROCm GPUs through the same
 voice from Hugging Face, so an internet connection is needed for that run.
 On Windows, use `py -3.12` in place of `python` if needed.
 
-Copy `kokoro_words.py` and `kokoro_lesson2.json` to the GPU computer, keeping
-them in the same folder. From that folder:
+Copy `kokoro_words.py`, `kokoro_lesson2.json`, and
+`kokoro_overrides.example.json` to the GPU computer, keeping them in the same
+folder. From that folder:
 
 ```bash
 python kokoro_words.py --dry-run
 python kokoro_words.py --output kokoro-output
 ```
 
-The output folder will contain three WAV files per word and a `manifest.json`
-recording each word GUID, source IPA, phonemes, voice, take, and filename.
+The output folder will contain three WAV files per pronunciation choice, plus a
+`manifest.json` recording each word GUID, source IPA, explicit phoneme choices,
+voice, take, and filename.
 By default the script requires a GPU; `--device cpu` is available for a CPU
 trial. Use `--voice` to override the exported voice, `--takes` to override the
 take count, `--words sure bridge` to select words, or `--limit 3` for a shorter run.
@@ -95,19 +100,40 @@ Existing output files are protected unless `--overwrite` is passed.
 To use the pack JSON exported from VacabyRock:
 
 ```bash
-python kokoro_words.py --input pack-audio.json --output kokoro-output
+python kokoro_words.py --input pack-audio.json \
+  --overrides kokoro_overrides.example.json --output kokoro-output
 ```
 
 The bundled `kokoro_lesson2.json` is only a demo with placeholder GUIDs. Use
 the JSON exported from your actual pack for uploadable filenames.
 
-The script stops if a word lacks IPA, uses optional sounds in parentheses, or
-contains a symbol Kokoro cannot encode. For example, the full Lesson 2 pack's
-`sentence` entry has `(t)` and needs an explicit pronunciation before synthesis.
-Dictionary slashes, syllable dots, and non-syllabic marks are removed, and
-tie-bar affricates are mapped to Kokoro's symbols. Review the resulting
-`manifest.json` and listen to the samples: a valid IPA transcription does not
-guarantee that Kokoro will produce the desired accent or pronunciation.
+The converter uses the first broad `/IPA/` transcription when Wiki also gives
+narrow `[IPA]` notes. It expands parentheses into explicit forms; for example,
+`sentence` with optional `(t)` produces a form with and without `t`. It maps
+rhotic vowels, vowel length, syllabic consonants, diphthongs, and affricates to
+Kokoro's American English phoneme set. It checks that set before loading the
+model and reports all words needing review instead of silently dropping sounds.
+It also maps the American flap `ɾ` in dictionary IPA to Kokoro's `T` token.
+
+Some IPA symbols have no unambiguous American English mapping. In the current
+library, `cross` (`ɒ`), `morning` (`o`), and `order` (`o`) need a decision. The
+included [override example](kokoro_overrides.example.json) gives explicit
+Kokoro phonemes for them; review or edit those choices before generating.
+You can pass your own JSON file with `--overrides path/to/overrides.json`, keyed
+by English word. A value may be one phoneme string or a list of alternatives.
+Overrides are recorded in `manifest.json`. The generator never falls back to
+spelling when an IPA conversion is uncertain.
+
+The conversion follows Kokoro's English symbol set, but Wiki transcriptions
+can represent different accents or contain mistakes. For example, a bare `e`
+is mapped to Kokoro's `ɛ` as a practical English approximation. Listen before
+uploading, and use an override whenever the saved transcription or automatic
+mapping produces the wrong sound.
+
+For the full Lesson 2 pack, the converter prepares 34 words and 36 pronunciation
+choices with the example overrides. Review the resulting `manifest.json` and
+listen to the samples: a valid IPA transcription still does not guarantee that
+Kokoro will produce the desired accent or pronunciation.
 
 ### Why a short clip can sound like an extra word
 
@@ -118,8 +144,26 @@ the vowel. It also maps IPA diphthongs such as `eɪ` and `aɪ` to Kokoro's
 The earlier conversion left stress before the initial consonant and split
 diphthongs into separate tokens, which could hurt pronunciation.
 
-Even with correct phonemes, the model's [voice notes](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)
+Even with correct phonemes, the model's
+[voice notes](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md)
 warn that very short utterances can be weak. A reported
 [boundary-token issue](https://github.com/hexgrad/kokoro/issues/344) also finds
 that speeds below `1.0` can produce a phantom opening vowel. The default speed
 is `1.0`; compare the three takes and keep the cleanest one.
+
+For a word that still sounds wrong when spoken alone, try `--context-repeats 5`.
+This generates five repetitions from the IPA-derived phonemes and saves only
+the middle word, cutting at the neighboring spaces. It is a separate trial:
+write it to a new output folder so the original takes remain available.
+
+```bash
+python kokoro_words.py --input pack-audio.json --words key affirmative \
+  --context-repeats 5 --output kokoro-context-trial
+```
+
+The manifest records `context_repeats` for each take. Word boundaries are
+estimated from Kokoro's predicted token durations, so listen for clipped first
+or last sounds before uploading. The `key` phonemes `kˈi` already match
+Kokoro's own English conversion; changing its IPA spelling cannot guarantee
+a better clip. The `affirmative` IPA `/əˈfɝməɾɪv/` now becomes
+`əfˈɜɹməTɪv`, matching Kokoro's flap token.

@@ -68,8 +68,6 @@ def test_pack_audio_export_upload_and_archive_roundtrip(client, database):
         assert uploaded.status_code == 200, uploaded.text
         assert uploaded.json() == {"imported": 2, "duplicates": 1}
         saved = (await client.get(f"/api/words/{first['id']}")).json()
-        assert saved["audio_status"] == "ready"
-        assert saved["audio_source_url"] is None
         played = await client.get(saved["audio"])
         assert played.headers["content-type"] == "audio/wav"
         assert played.content == good

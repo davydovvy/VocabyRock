@@ -35,11 +35,12 @@ class ArchiveWord(WordInput):
     guid: UUID
     picture: str | None = None
     audio: str | None = None
-    audio_source_url: str | None = None
-    audio_status: str | None = None
-    audio_attempts: int = 0
-    audio_next_attempt_at: datetime | None = None
-    audio_error: str | None = None
+    # Accept queue metadata in older archives without restoring obsolete queue state.
+    audio_source_url: str | None = Field(default=None, exclude=True)
+    audio_status: str | None = Field(default=None, exclude=True)
+    audio_attempts: int = Field(default=0, exclude=True)
+    audio_next_attempt_at: datetime | None = Field(default=None, exclude=True)
+    audio_error: str | None = Field(default=None, exclude=True)
     created_at: datetime
     updated_at: datetime
 
@@ -111,15 +112,6 @@ def export_archive(db: Session) -> StreamingResponse:
                         "notes": word.notes,
                         "picture": picture_entry,
                         "audio": audio_entry,
-                        "audio_source_url": word.audio_source_url,
-                        "audio_status": word.audio_status,
-                        "audio_attempts": word.audio_attempts,
-                        "audio_next_attempt_at": (
-                            word.audio_next_attempt_at.isoformat()
-                            if word.audio_next_attempt_at
-                            else None
-                        ),
-                        "audio_error": word.audio_error,
                         "created_at": word.created_at.isoformat(),
                         "updated_at": word.updated_at.isoformat(),
                     }
@@ -337,12 +329,14 @@ def import_archive(data: bytes, db: Session) -> dict:
         for item in manifest.words:
             guid = str(item.guid)
             word = word_matches[guid] or Word(guid=guid)
+            keep_audio = word.audio is not None and item.audio is None
             fields = item.model_dump(exclude={"guid", "picture", "audio"})
             for key, value in fields.items():
                 setattr(word, key, value)
             word.guid = guid
             word.picture = media_paths.get(item.picture)
-            word.audio = media_paths.get(item.audio)
+            if not keep_audio:
+                word.audio = media_paths.get(item.audio)
             db.add(word)
             imported_words[guid] = word
         db.flush()
@@ -371,7 +365,16 @@ def import_archive(data: bytes, db: Session) -> dict:
             path.unlink(missing_ok=True)
         raise
 
-    for url in old_media:
+    retained_media = {
+        path
+        for path in (
+            *db.scalars(select(Word.picture)),
+            *db.scalars(select(Word.audio)),
+            *db.scalars(select(Pack.cover)),
+        )
+        if path
+    }
+    for url in old_media - retained_media:
         try:
             prefix, name = url.rsplit("/", 1)
             folder = "images" if prefix == "/media" else "audio" if prefix == "/audio" else None

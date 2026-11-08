@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     session_days: int = 30
     pixabay_api_key: str = ""
-    audio_downloads_enabled: bool = False
 
     @property
     def database_url(self) -> str:

@@ -69,13 +69,13 @@ def display_english(word: Word) -> str:
     return word.english
 
 
-def has_downloaded_audio(word: Word) -> bool:
+def has_local_audio(word: Word) -> bool:
     if not word.audio:
         return False
     filename = Path(word.audio).name
     return (
         word.audio == f"/audio/{filename}"
-        and Path(filename).suffix in {".mp3", ".ogg"}
+        and Path(filename).suffix.lower() in {".mp3", ".ogg", ".wav"}
         and (get_settings().data_dir / "audio" / filename).is_file()
     )
 
@@ -254,7 +254,7 @@ def create_practice(
         word_ids,
     )
     if kind == "listen":
-        selected = [word for word in selected if has_downloaded_audio(word)]
+        selected = [word for word in selected if has_local_audio(word)]
     selected_pairs = []
     if kind == "match":
         selected_pairs = _big_match_pairs(selected)
@@ -270,9 +270,9 @@ def create_practice(
         raise HTTPException(
             400,
             (
-                "No words with downloaded audio are available in this pack"
+                "No words with saved recordings are available in this pack"
                 if pack_id is not None
-                else "No words with downloaded audio are available"
+                else "No words with saved recordings are available"
             )
             if kind == "listen"
             else (

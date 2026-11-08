@@ -10,8 +10,8 @@ from uuid import UUID
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from . import wiktapi
 from .config import get_settings
+from .media import remove_audio
 from .models import Pack
 
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -87,11 +87,6 @@ async def import_audio(pack: Pack, files: list[UploadFile], db: Session) -> dict
             word = words[guid]
             replaced.append(word.audio)
             word.audio = f"/audio/{path.name}"
-            word.audio_source_url = None
-            word.audio_status = "ready"
-            word.audio_attempts = 0
-            word.audio_next_attempt_at = None
-            word.audio_error = None
         db.commit()
     except Exception:
         db.rollback()
@@ -99,5 +94,5 @@ async def import_audio(pack: Pack, files: list[UploadFile], db: Session) -> dict
             path.unlink(missing_ok=True)
         raise
     for old in replaced:
-        wiktapi.remove_audio(old)
+        remove_audio(old)
     return {"imported": len(selected), "duplicates": duplicates}

@@ -7,7 +7,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 - React, TypeScript, Vite, and Tailwind CSS build a responsive single page app.
 - FastAPI serves the compiled app and REST API from the same origin.
 - SQLite stores users, shared vocabulary, packs, sessions, settings, and each child's progress by word and direction. Each word and pack has a stable GUID for portable vocabulary archives. SQLAlchemy models and Alembic migrations manage the schema.
-- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. When audio downloads are enabled, a selected Wikimedia pronunciation is saved to that volume for offline playback. Word-list speaker buttons can use browser speech synthesis when no recording is stored; the Listen game requires a downloaded recording.
+- Uploaded and selected Pixabay images are validated, resized, and kept on the local data volume. Kokoro WAV recordings are uploaded to word packs and stored there for offline playback. The Listen game uses locally stored recordings.
 - One container runs FastAPI. Docker Compose bind mounts one persistent directory.
 
 ## Repository layout
@@ -32,7 +32,7 @@ VacabyRock is a family vocabulary adventure for two children learning English an
 
 On first startup, VacabyRock creates the parent profile, two child profiles, and Animals, Food, and Everyday Objects packs with 30 sample words. Later restarts keep all data. The initial parent password is read from `.env`; the example placeholder does not grant access.
 
-The first Docker build downloads build dependencies. Parent picture searches and dictionary lookups need internet access, as do pronunciation downloads when enabled. Once a recording is ready, children can play it without internet access. Word-list speaker buttons can use the device's English speech voice when no recording is saved.
+The first Docker build downloads build dependencies. Parent picture searches and dictionary lookups need internet access. Kokoro audio is generated on a separate computer and uploaded as WAV files; saved recordings play without internet access. The child's word list can also use the device's English speech voice.
 
 ## Synology DiskStation
 
@@ -45,17 +45,6 @@ docker compose up -d --build
 ```
 
 If you use a different Synology user ID, set `PUID` and `PGID` to that owner's IDs. Allow the chosen port through the DiskStation firewall. The app is intended for a trusted family LAN: child login is intentionally passwordless. If you expose it beyond the LAN, put it behind HTTPS and additional network access controls, then set `COOKIE_SECURE=true`.
-
-### Download pronunciation on the laptop only
-
-The audio download worker is disabled by default. Each installation reads its own `.env`:
-
-| Installation | `.env` setting | Result |
-| --- | --- | --- |
-| Laptop | `AUDIO_DOWNLOADS_ENABLED=true` | Downloads selected recordings to the laptop's data directory. |
-| Synology | `AUDIO_DOWNLOADS_ENABLED=false` or no setting | Makes no pronunciation download requests. Imported and previously stored recordings still play. |
-
-Keep a separate `.env` on each device; do not copy the laptop's `.env` to Synology. After changing the flag, restart that installation. If its image already contains this feature, `docker compose up -d` is enough; use `docker compose up -d --build` when deploying updated source. A disabled worker leaves pending recordings queued, so words saved directly on Synology may continue to show **Audio queued for download**. Finish downloads on the laptop before exporting the vocabulary archive, then import the archive on Synology to transfer the recordings.
 
 If the NAS cannot download build dependencies and it has the same CPU architecture as your laptop, build the app on the laptop and transfer the image file to the Synology project folder. Run `docker compose build` and `docker save -o vacabyrock-image.tar vacabyrock:local` on the laptop. On the NAS, use the updated `docker-compose.yml` and your existing `.env`, then run `sudo docker load -i vacabyrock-image.tar` and `sudo docker compose up -d --no-build`. The app applies database migrations when it starts. Keep the existing Synology data directory and make a backup before the update.
 
@@ -74,7 +63,7 @@ DATA_DIR=../data ../.venv/bin/python -m app.initialize
 DATA_DIR=../data FRONTEND_DIST=../frontend/dist ADMIN_PASSWORD=your-local-password ../.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-In another terminal, run `cd frontend && npm ci && npm run dev`. Open `http://localhost:5173`; Vite forwards `/api`, `/media`, and `/audio` to port 8000. The backend reads the repository root `.env` even when started from `backend/`. Environment variables set in the terminal override it. Set `AUDIO_DOWNLOADS_ENABLED=true` in the laptop's `.env` to fetch pronunciation files. Keep `.env` and `data/` private.
+In another terminal, run `cd frontend && npm ci && npm run dev`. Open `http://localhost:5173`; Vite forwards `/api`, `/media`, and `/audio` to port 8000. The backend reads the repository root `.env` even when started from `backend/`. Environment variables set in the terminal override it. Keep `.env` and `data/` private.
 
 ### Tests and checks
 
@@ -117,15 +106,15 @@ After saving, the picture is cleared everywhere the word appears, including pack
 
 ### Dictionary lookup and pronunciation
 
-In **Add Word** or **Edit Word**, enter the English word and click **Fill from Wikimedia**. Typing alone sends no lookup requests. The button queries [WiktAPI](https://wiktapi.dev/quickstart) for Russian translation choices, IPA, part of speech, and available recordings. When a word has different pronunciations for different meanings, select a translation suggestion to fill the IPA and part of speech from that dictionary entry and show its recordings. Switching to another entry replaces the earlier suggestion and clears an incompatible recording. US pronunciations appear first; if the entry lists a US spelling, the form offers it. Review the visible fields before saving. Missing information stays blank for manual entry.
+In **Add Word** or **Edit Word**, enter the English word and click **Fill from Wikimedia**. Typing alone sends no lookup requests. The button queries [WiktAPI](https://wiktapi.dev/quickstart) for Russian translation choices, IPA, and part of speech. When a word has different pronunciations for different meanings, select a translation suggestion to fill the IPA and part of speech from that dictionary entry. If the entry lists a US spelling, the form offers it. Review the visible fields before saving. Missing information stays blank for manual entry.
 
-Saving creates the word immediately. If a recording was selected, the library shows **Audio queued for download**, **Audio retry scheduled**, or an error with **Retry audio** while the download is pending or has failed. Once a recording is saved, a speaker button appears beside the word in both **Vocabulary** and the pack's **Manage Words** list; click it to hear the locally stored pronunciation. When enabled, a single background worker downloads recordings to the local data volume and resumes pending work after a restart. It spaces downloads and honors Wikimedia's `Retry-After` response; rate limits delay audio and are retried automatically without permanently failing the word. After eight unsuccessful attempts for other errors, use **Retry audio** to queue it again. The child's Listen game selects only unlearned words with a downloaded local recording. If none qualify, it explains that no recorded words are available.
+Once a Kokoro recording is uploaded, a speaker button appears beside the word in both **Vocabulary** and the pack's **Manage Words** list. The child's Listen game selects only unlearned words with a local recording. If none qualify, it explains that no recorded words are available.
 
-The lookup needs access to `api.wiktapi.dev`; audio downloads need access to `upload.wikimedia.org`. No dictionary API key is required. Wikimedia does not promise a fixed download quota and says limits can change; the app waits and retries when it receives a limit response. See [Wikimedia's API usage guidelines](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_API_Usage_Guidelines).
+The lookup needs access to `api.wiktapi.dev`. No dictionary API key is required. Pronunciation files are generated separately with Kokoro and uploaded through **Word Packs**.
 
-If many recordings stay queued on the laptop, first check that `AUDIO_DOWNLOADS_ENABLED=true` is set there. A Wikimedia HTTP 429 response means downloads are temporarily rate limited: the app displays the retry message, waits for the scheduled time, and resumes automatically. A backlog may take hours because the worker downloads one recording at a time and spaces requests. Restarting the container does not clear the queue or shorten Wikimedia's limit. If a word shows a permanent error from another cause, use **Retry audio** after fixing the cause. `GET /api/health` checks whether the app is running; it does not guarantee that Wikimedia currently accepts downloads.
+When upgrading from a version with Wikimedia audio downloads, pending download jobs are discarded. Previously saved recordings remain available. The old `AUDIO_DOWNLOADS_ENABLED` entry can be removed from an existing `.env`; it has no effect now. Older vocabulary archives with download queue metadata still import.
 
-The **Import / Export** area downloads one ZIP vocabulary archive containing all words, packs, pack membership and order, pictures, pack covers, IPA transcriptions, notes, examples, and downloaded pronunciation files. On the laptop, finish editing and download the archive. On Synology, upload it, click **Check archive**, then **Replace library**. The archive is validated before changes are made. Import replaces all destination words and packs, including their media. Child profiles, settings, stars, and progress stay on the destination. A word or pack with the same GUID keeps its database ID; on the first transfer from an independently installed library, a matching English word or pack name adopts the archive GUID. This preserves learning progress for matching words. Progress for words omitted from the archive is removed. Reimporting the same archive is safe. This vocabulary archive is distinct from the full database backup below, which also includes profiles and progress.
+The **Import / Export** area downloads one ZIP vocabulary archive containing all words, packs, pack membership and order, pictures, pack covers, IPA transcriptions, notes, examples, and stored pronunciation files. On the laptop, finish editing and download the archive. On Synology, upload it, click **Check archive**, then **Replace library**. The archive is validated before changes are made. Import replaces all destination words and packs. Matching words keep their existing pronunciations when the archive has no recording for them; a recording in the archive replaces the existing one. Other media is replaced with the archive's media. Child profiles, settings, stars, and progress stay on the destination. A word or pack with the same GUID keeps its database ID; on the first transfer from an independently installed library, a matching English word or pack name adopts the archive GUID. This preserves learning progress for matching words. Progress for words omitted from the archive is removed. Reimporting the same archive is safe. This vocabulary archive is distinct from the full database backup below, which also includes profiles and progress.
 
 The Progress area shows both children independently, including learned and difficult words, success rates, recent games, and upcoming reviews. It can reset one word, one pack, or all progress for one child with confirmation. API clients can set a child's learned state with parent authentication using `PUT /api/progress/learned` and a JSON body containing `child_id`, `word_id`, and `learned` (a Boolean).
 
@@ -139,11 +128,11 @@ For API clients, parent authentication is required for `GET /api/parent/practice
 
 In **Word Packs**, the parent can download two A4 PDFs for any pack. **Word sheet** fits pictures, English words, transcriptions, and Russian translations into compact columns. **Writing test** shows each picture and Russian translation with a line for the child to write the English word. For words marked as singular countable nouns or verbs, the word sheet includes `a`/`an` or `to`, and the writing test prints that prefix before the answer line. The `a`/`an` choice uses the saved transcription. Both PDFs include every word in the pack and use the pack's current order. If a word has no saved picture, its image space is left blank.
 
-For generated pronunciations, use **Audio JSON** on a pack to export its word GUIDs and saved IPA. Follow [the Kokoro guide](scripts/README-kokoro.md) to make three `af_heart` WAV takes per word, choose one take for each word, then use **Upload audio** on the same pack. A new upload replaces that word's recording, and WAV recordings are included in vocabulary archives.
+For generated pronunciations, use **Audio JSON** on a pack to export its word GUIDs and saved IPA. Follow [the Kokoro guide](scripts/README-kokoro.md) on the second computer to make three `af_heart` WAV takes per pronunciation choice, keep one file per word, then use **Upload audio** on the same pack. A new upload replaces that word's recording, and WAV recordings are included in vocabulary archives.
 
 ## Learning and settings
 
-Children can choose **Study** on a pack and then pick Big Match, Flip Cards, Pick the Word, Type It, or Listen. Each game except Big Match includes every unlearned word in the pack; Listen includes only those with a downloaded recording. The default direction is Russian to English, and children can switch direction before starting a game. **Test** asks for the English spelling of every unlearned word in the pack, uses keyboard entry, and offers no hints.
+Children can choose **Study** on a pack and then pick Big Match, Flip Cards, Pick the Word, Type It, or Listen. Each game except Big Match includes every unlearned word in the pack; Listen includes only those with a locally stored recording. The default direction is Russian to English, and children can switch direction before starting a game. **Test** asks for the English spelling of every unlearned word in the pack, uses keyboard entry, and offers no hints.
 
 When typing a singular countable noun with IPA in Russian-to-English practice, the required `a` or `an` appears beside the input and cannot be edited. Verbs similarly show a fixed `to`. The child types only the word itself. A child learns a word after typing its English spelling correctly twice in a row without hints. A wrong spelling resets that word's streak. Case and extra spaces do not matter, but the optional typo tolerance does not count toward learning. Choices and matching provide practice without marking words learned; flipping cards also leaves learning progress unchanged.
 
@@ -173,9 +162,8 @@ Correct answers lengthen review intervals; missed words return sooner. Reviews a
 | `PUID`, `PGID` | `10001` | Container process user and group |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
 | `PIXABAY_API_KEY` | empty | Optional server-side key for parent picture search |
-| `AUDIO_DOWNLOADS_ENABLED` | `false` | Set `true` on the installation that downloads Wikimedia pronunciation recordings; leave `false` on a NAS that receives recordings through vocabulary imports |
 
-The mount contains `vacabyrock.sqlite3`, `images/`, `audio/` (downloaded pronunciation recordings), optional `pixabay-cache/`, and optional `backups/`. Audio queue status and retry times are stored in SQLite, so queued work survives a container restart. SQLite may also create temporary `-wal` and `-shm` files. Back up the data directory and `.env` separately. Do not put either in version control.
+The mount contains `vacabyrock.sqlite3`, `images/`, `audio/` (uploaded pronunciation recordings), optional `pixabay-cache/`, and optional `backups/`. SQLite may also create temporary `-wal` and `-shm` files. Back up the data directory and `.env` separately. Do not put either in version control.
 
 ## Backup and restore
 
@@ -202,7 +190,7 @@ Create a backup, update the source, then run `docker compose up -d --build`. Sta
 
 ## Known limitations
 
-- Listen requires a downloaded pronunciation file for each word it asks. Words without one remain available in the other games.
+- Listen requires a locally stored pronunciation file for each word it asks. Words without one remain available in the other games.
 - Child profiles have no passwords. Keep the service on a trusted LAN.
 - Pictures use uploaded files or local emoji placeholders; the sample packs do not include licensed artwork.
 - Pixabay search needs an API key and internet access. The app downloads the selected 150 px preview and saves it locally; if Pixabay limits that download, the app retries briefly and may ask you to try again later.
